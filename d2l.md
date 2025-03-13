@@ -775,7 +775,6 @@ b = torch.ones([n])
 正态分布和线性回归之间的关系很密切。 正态分布（normal distribution），也称为*高斯分布*（Gaussian distribution）， 简单的说，若随机变量x具有均值μ和方差σ^2^（标准差σ），其正态分布概率密度函数如下：
 $$
 p(x) = \frac{1}{\sqrt{2\pi\sigma^2}} \exp \left( -\frac{1}{2\sigma^2} (x - \mu)^2 \right).
-
 $$
 改变均值会产生沿x轴的偏移，增加方差将会分散分布、降低峰值。
 
@@ -787,7 +786,7 @@ $$
 
 在下图中，我们将线性回归模型描述为一个神经网络，该图只显示连接模式，隐去了权重和偏置的值。
 
-![image-20250312163421086](C:\Users\Ai\AppData\Roaming\Typora\typora-user-images\image-20250312163421086.png)
+![image-20250312163421086](./d2l.assets/image-20250312163421086.png)
 
 如图所示的神经网络中，输入为x~1~,x~2~,...,x~d~，因此输入层中的输入数（或称特征维度，feature dimensionality）为d。网络输出为o~1~，因此输出层中的输出数是1。
 
@@ -809,7 +808,7 @@ from d2l import torch as d2l
 
 为了简单起见，我们将根据带有噪声的线性模型构造一个人造数据集。 我们的任务是使用这个有限样本的数据集来恢复这个模型的参数。 我们将使用低维数据，这样可以很容易地将其可视化。 在下面的代码中，我们生成一个包含1000个样本的数据集， 每个样本包含从标准正态分布中采样的2个特征。 我们的合成数据集是一个矩阵X∈R^1000×2^。
 
-我们将使用线性模型参数 w = [2,-3,4]^T^、b = 4.2和噪声项$\epsilon$生成数据集及其标签：
+我们将使用线性模型参数 w = [2,-3.4]^T^、b = 4.2和噪声项$\epsilon$生成数据集及其标签：
 $$
 y = Xw + b + \epsilon.
 $$
@@ -840,6 +839,10 @@ features, labels = synthetic_data(true_w, true_b, 1000)
 >
 > size()：生成的张量形状（仅在mean和std是标量时使用）
 >
+> ---
+>
+> 
+>
 > ```python
 > torch.matmul(input, other, *, out=None) → Tensor
 > ```
@@ -859,6 +862,323 @@ features, labels = synthetic_data(true_w, true_b, 1000)
 注意，`features`中的每一行都包含一个二维数据样本， `labels`中的每一行都包含一维标签值（一个标量）。
 
 ### 3.2.2读取数据集
+
+训练模型时要对数据集进行遍历，每次抽取一小批量样本，并使用它们来更新我们的模型。 由于这个过程是训练机器学习算法的基础，所以有必要定义一个函数， 该函数能打乱数据集中的样本并以小批量方式获取数据。
+
+```python
+def data_iter(batch_size, features, labels):
+    num_examples = len(features)    #获得数据的数量
+    indices = list(range(num_examples))   #列表[0-num_examples-1]
+    # 这些样本是随机读取的，没有特定的顺序
+    random.shuffle(indices)     #打乱索引列表
+    for i in range(0, num_examples, batch_size):    #0~num_examples，batch_size步长   
+        batch_indices = torch.tensor(
+            indices[i: min(i + batch_size, num_examples)])   
+        	#把indice[i:min(1+batch_size,num_examples)]变成张量，是有batch_size个元素的索引列表
+        yield features[batch_indices], labels[batch_indices]
+```
+
+> ```python
+> random.shuffle(list)
+> ```
+>
+> 该函数可以用来打乱一个列表，注意其并非创建一个新列表，而是在原先列表的基础上修改。
+>
+> ---
+>
+> 
+>
+> ```python
+> yield
+> ```
+>
+> 在 Python 中，`yield` 关键字用于创建 **生成器（generator）**。它的作用类似于 `return`，但不会终止函数的执行，而是 **暂停** 代码的运行，并在下一次调用时从暂停的地方继续执行。
+>
+> ## 1. `yield` vs. `return`
+>
+> | 特性           | `return`               | `yield`                    |
+> | -------------- | ---------------------- | -------------------------- |
+> | 作用           | 直接返回值，并终止函数 | 暂停函数执行，并返回值     |
+> | 返回类型       | 普通值                 | 生成器对象（generator）    |
+> | 是否可继续执行 | 否，函数终止           | 是，下次 `next()` 继续执行 |
+>
+> ## 2. `yield` 的基本用法
+>
+> ```
+> python复制编辑def my_generator():
+>     print("执行到第 1 步")
+>     yield 1
+>     print("执行到第 2 步")
+>     yield 2
+>     print("执行到第 3 步")
+>     yield 3
+> 
+> # 创建生成器对象
+> gen = my_generator()
+> 
+> # 依次获取 yield 返回的值
+> print(next(gen))  # 执行到第 1 步，返回 1
+> print(next(gen))  # 执行到第 2 步，返回 2
+> print(next(gen))  # 执行到第 3 步，返回 3
+> ```
+>
+> **输出：**
+>
+> ```
+> 复制编辑执行到第 1 步
+> 1
+> 执行到第 2 步
+> 2
+> 执行到第 3 步
+> 3
+> ```
+>
+> > **注意**：每次调用 `next(gen)`，代码会从 `yield` 语句的**上次暂停处继续执行**。
+>
+> `yield` 用于创建生成器，使函数可以 **暂停执行**，并在需要时继续执行。
+>  ✅ 适用于 **大规模数据处理**（如深度学习中的数据加载）。
+>  ✅ **节省内存**，不会一次性返回所有数据，而是按需生成。
+
+通常，我们利用GPU并行运算的优势，处理合理大小的“小批量”。 每个样本都可以并行地进行模型计算，且每个样本损失函数的梯度也可以被并行计算。 GPU可以在处理几百个样本时，所花费的时间不比处理一个样本时多太多。
+
+我们直观感受一下小批量运算：读取第一个小批量数据样本并打印。 每个批量的特征维度显示批量大小和输入特征数。 同样的，批量的标签形状与`batch_size`相等。
+
+```python
+batch_size = 10
+
+for X, y in data_iter(batch_size, features, labels):
+    print(X, '\n', y)
+    break
+```
+
+```
+tensor([[ 0.3659,  0.2387],
+        [ 0.4875,  2.2545],
+        [-0.2113,  1.1963],
+        [ 0.0507,  0.6895],
+        [ 0.4157,  0.7875],
+        [-0.9061,  1.2096],
+        [-0.4747,  0.5704],
+        [ 0.4208, -0.1846],
+        [ 1.1956, -2.3339],
+        [ 0.0032,  1.2743]]) 
+ tensor([[ 4.1212],
+        [-2.4826],
+        [-0.2767],
+        [ 1.9448],
+        [ 2.3533],
+        [-1.7318],
+        [ 1.2997],
+        [ 5.6858],
+        [14.5299],
+        [-0.1249]])
+```
+
+当我们运行迭代时，我们会连续地获得不同的小批量，直至遍历完整个数据集。 上面实现的迭代对教学来说很好，但它的执行效率很低，可能会在实际问题上陷入麻烦。 例如，它要求我们将所有数据加载到内存中，并执行大量的随机内存访问。 在深度学习框架中实现的内置迭代器效率要高得多， 它可以处理存储在文件中的数据和数据流提供的数据。
+
+### 3.2.3初始化模型参数
+
+在开始用小批量随机梯度下降优化我们的模型参数之前， 我们需要先有一些参数。 在下面的代码中，我们通过从均值为0、标准差为0.01的正态分布中采样随机数来初始化权重， 并将偏置初始化为0。
+
+```python
+w = torch.normal(0, 0.01, size=(2,1), requires_grad=True)
+b = torch.zeros(1, requires_grad=True)
+```
+
+在初始化参数之后，我们的任务是更新这些参数，直到这些参数足够拟合我们的数据。 每次更新都需要计算损失函数关于模型参数的梯度。 有了这个梯度，我们就可以向减小损失的方向更新每个参数。
+
+### 3.2.4定义模型
+
+要计算线性模型的输出， 我们只需计算输入特征X和模型权重w的矩阵-向量乘法后加上偏置b。
+
+```python
+def linreg(X, w, b):  #@save
+    """线性回归模型"""
+    return torch.matmul(X, w) + b
+```
+
+### 3.2.5定义损失函数
+
+因为需要计算损失函数的梯度，所以我们应该先定义损失函数。 这里我们使用3.1中描述的平方损失函数。 在实现中，我们需要将真实值`y`的形状转换为和预测值`y_hat`的形状相同。
+
+```python
+def squared_loss(y_hat, y):  #@save
+    """均方损失"""
+    return (y_hat - y.reshape(y_hat.shape)) ** 2 / 2
+```
+
+### 3.2.6定义优化算法
+
+使用小批量随机梯度下降
+
+在每一步中，使用从数据集中随机抽取的一个小批量，然后根据参数计算损失的梯度。 接下来，朝着减少损失的方向更新我们的参数。 下面的函数实现小批量随机梯度下降更新。 该函数接受模型参数集合、学习速率和批量大小作为输入。每 一步更新的大小由学习速率`lr`决定。 因为我们计算的损失是一个批量样本的总和，所以我们用批量大小（`batch_size`） 来规范化步长，这样步长大小就不会取决于我们对批量大小的选择。
+
+```python
+def sgd(params, lr, batch_size):  #@save
+    """小批量随机梯度下降"""
+    with torch.no_grad():
+        for param in params:
+            param -= lr * param.grad / batch_size
+            param.grad.zero_()
+```
+
+### 3.2.7训练
+
+理解这段代码至关重要，因为从事深度学习后， 相同的训练过程几乎一遍又一遍地出现。 
+
+在每次迭代中，我们读取一小批量训练样本，并通过我们的模型来获得一组预测。 计算完损失后，我们开始反向传播，存储每个参数的梯度。 最后，我们调用优化算法`sgd`来更新模型参数。
+
+概括为以下循环：
+
+* 初始化训练参数
+* 重复以下训练，直到完成：
+  * 计算梯度：$\mathbf{g} \leftarrow \partial_{(\mathbf{w},b)} \frac{1}{|\mathcal{B}|} \sum_{i \in \mathcal{B}} l(\mathbf{x}^{(i)}, y^{(i)}, \mathbf{w}, b)$
+  * 更新参数：$\text{更新参数 } (\mathbf{w}, b) \leftarrow (\mathbf{w}, b) - \eta \mathbf{g}$
+
+在每个*迭代周期*（epoch）中，我们使用`data_iter`函数遍历整个数据集， 并将训练数据集中所有样本都使用一次（假设样本数能够被批量大小整除）。 这里的迭代周期个数`num_epochs`和学习率`lr`都是超参数，分别设为3和0.03。 设置超参数很棘手，需要通过反复试验进行调整。 我们现在忽略这些细节，以后会在 [11节](https://zh.d2l.ai/chapter_optimization/index.html#chap-optimization)中详细介绍。
+
+```python
+lr = 0.03
+num_epochs = 3
+net = linreg
+loss = squared_loss
+for epoch in range(num_epochs): #迭代周期为3
+    for X, y in data_iter(batch_size, features, labels):
+        l = loss(net(X, w, b), y)  # X和y的小批量损失
+        # 因为l形状是(batch_size,1)，而不是一个标量。l中的所有元素被加到一起，
+        # 并以此计算关于[w,b]的梯度
+        l.sum().backward()
+        sgd([w, b], lr, batch_size)  # 使用参数的梯度更新参数
+    with torch.no_grad():
+        train_l = loss(net(features, w, b), labels)
+        print(f'epoch {epoch + 1}, loss {float(train_l.mean()):f}')
+```
+
+> ```python
+> torch.no_grad() 
+> ```
+>
+> `torch.no_grad()` 是 PyTorch 中的一个上下文管理器（context manager），用于在不需要计算梯度时临时禁用自动求导。它的主要作用是减少内存占用并加快计算速度，通常在模型推理（inference）阶段使用。
+
+真实参数和通过训练学到的参数确实非常接近。
+
+```python
+print(f'w的估计误差: {true_w - w.reshape(true_w.shape)}')
+print(f'b的估计误差: {true_b - b}')
+```
+
+```
+w的估计误差: tensor([ 3.8230e-04, -6.3181e-05], grad_fn=<SubBackward0>)
+b的估计误差: tensor([0.0008], grad_fn=<RsubBackward1>)
+```
+
+## 3.3线性回归的简洁实现
+
+> 由于数据迭代器、损失函数、优化器和神经网络层很常用， 现代深度学习库也为我们实现了这些组件。
+
+### 3.3.1生成数据集
+
+```python
+import numpy as np
+import torch
+from torch.utils import data
+from d2l import torch as d2l
+
+true_w = torch.tensor([2, -3.4])
+true_b = 4.2
+features, labels = d2l.synthetic_data(true_w, true_b, 1000) #这不是个库函数,而是d2l定义的数据生成函数
+```
+
+### 3.3.2读取数据集
+
+我们可以调用框架中现有的API来读取数据。 我们将`features`和`labels`作为API的参数传递，并通过数据迭代器指定`batch_size`。 此外，布尔值`is_train`表示是否希望数据迭代器对象在每个迭代周期内打乱数据。
+
+```python
+def load_array(data_arrays, batch_size, is_train=True):  #@save
+    """构造一个PyTorch数据迭代器"""
+    dataset = data.TensorDataset(*data_arrays)
+    return data.DataLoader(dataset, batch_size, shuffle=is_train)
+
+batch_size = 10
+data_iter = load_array((features, labels), batch_size)
+```
+
+>```python
+>dataset = TensorDataset(*tensors)
+>```
+>
+>`torch.utils.data.TensorDataset` 是 PyTorch 提供的一个**数据集包装类**，用于将 **张量（Tensor）数据封装成 PyTorch 的数据集对象**，使其可以与 `DataLoader` 结合使用，方便进行小批量（mini-batch）训练。
+>
+>其参数tensors:多个tensor,他们的第一个维度(样本数)必须相同。
+>
+>---
+>
+>```python
+>torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False, pin_memory=False)
+>```
+>
+>1. dataset:传入 **数据集**（如 `TensorDataset`、自定义 `Dataset`）。
+>
+>2. batch_size:每次训练 **取 `batch_size` 个样本** 组成一个 batch,默认为1。
+>
+>3. shuffle（默认 `False`）:
+>
+>- `shuffle=True` → **随机打乱数据**，常用于 **训练集**。
+>- `shuffle=False` → **按顺序读取数据**，常用于 **测试集**。
+
+使用`data_iter`的方式与`3.2`中我们在中使用`data_iter`函数的方式相同。为了验证是否正常工作，让我们读取并打印第一个小批量样本。 与之前不同，这里我们使用`iter`构造Python迭代器，并使用`next`从迭代器中获取第一项。
+
+```python
+next(iter(data_iter))
+```
+
+### 3.3.3定义模型
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
