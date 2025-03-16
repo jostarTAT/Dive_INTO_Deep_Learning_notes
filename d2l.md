@@ -1134,53 +1134,464 @@ next(iter(data_iter))
 
 ### 3.3.3定义模型
 
+对于标准深度学习模型，我们可以使用框架的预定义好的层。这使我们只需关注使用哪些层来构造模型，而不必关注层的实现细节。 我们首先定义一个模型变量`net`，它是一个`Sequential`类的实例。 `Sequential`类将多个层串联在一起。 当给定输入数据时，`Sequential`实例将数据传入到第一层， 然后将第一层的输出作为第二层的输入，以此类推。
 
+在下面的例子中，我们的模型只包含一个层，因此实际上不需要`Sequential`。 但是由于以后几乎所有的模型都是多层的，在这里使用`Sequential`会让你熟悉“标准的流水线”。
 
+在PyTorch中，全连接层在`Linear`类中定义。 值得注意的是，我们将两个参数传递到`nn.Linear`中。 第一个指定输入特征形状，即2，第二个指定输出特征形状，输出特征形状为单个标量，因此为1。
 
+```python
+# nn是神经网络的缩写
+from torch import nn
 
+net = nn.Sequential(nn.Linear(2, 1))
+```
 
+### 3.3.4初始化模型参数
 
+在使用`net`之前，我们需要初始化模型参数。 如在线性回归模型中的权重和偏置。 深度学习框架通常有预定义的方法来初始化参数。 在这里，我们指定每个权重参数应该从均值为0、标准差为0.01的正态分布中随机采样， 偏置参数将初始化为零。
 
+正如我们在构造`nn.Linear`时指定输入和输出尺寸一样， 现在我们能直接访问参数以设定它们的初始值。 我们通过`net[0]`选择网络中的第一个图层， 然后使用`weight.data`和`bias.data`方法访问参数。 我们还可以使用替换方法`normal_`和`fill_`来重写参数值。
 
+```python
+net[0].weight.data.normal_(0, 0.01)
+net[0].bias.data.fill_(0)
+```
 
+### 3.3.5定义损失函数
 
+计算均方误差使用的是`MSELoss`类，也称为平方L2范数。 默认情况下，它返回所有样本损失的平均值。
 
+```python
+loss = nn.MSELoss()
+```
 
+### 3.3.6定义优化函数
 
+小批量随机梯度下降算法是一种优化神经网络的标准工具， PyTorch在`optim`模块中实现了该算法的许多变种。 当我们实例化一个`SGD`实例时，我们要指定优化的参数 （可通过`net.parameters()`从我们的模型中获得）以及优化算法所需的超参数字典。 小批量随机梯度下降只需要设置`lr`值，这里设置为0.03。
 
+```python
+trainer = torch.optim.SGD(net.parameters(), lr=0.03)
+```
 
+### 3.3.7训练
 
+通过深度学习框架的高级API来实现我们的模型只需要相对较少的代码。 我们不必单独分配参数、不必定义我们的损失函数，也不必手动实现小批量随机梯度下降。 当我们需要更复杂的模型时，高级API的优势将大大增加。 当我们有了所有的基本组件，训练过程代码与我们从零开始实现时所做的非常相似。
 
+回顾一下：在每个迭代周期里，我们将完整遍历一次数据集（`train_data`）， 不停地从中获取一个小批量的输入和相应的标签。 对于每一个小批量，我们会进行以下步骤:
 
+- 通过调用`net(X)`生成预测并计算损失`l`（前向传播）。
+- 通过进行反向传播来计算梯度。
+- 通过调用优化器来更新模型参数。
 
+为了更好的衡量训练效果，我们计算每个迭代周期后的损失，并打印它来监控训练过程。
 
+```python
+num_epochs = 3
+for epoch in range(num_epochs):
+    for X, y in data_iter:
+        l = loss(net(X) ,y)        
+        trainer.zero_grad()           #再每轮之前清空optimizer的梯度
+        l.backward()
+        trainer.step()
+    l = loss(net(features), labels)
+    print(f'epoch {epoch + 1}, loss {l:f}')
+```
 
+下面我们比较生成数据集的真实参数和通过有限数据训练获得的模型参数。 要访问参数，我们首先从`net`访问所需的层，然后读取该层的权重和偏置。 正如在从零开始实现中一样，我们估计得到的参数与生成数据的真实参数非常接近。
 
+```python
+w = net[0].weight.data
+print('w的估计误差：', true_w - w.reshape(true_w.shape))
+b = net[0].bias.data
+print('b的估计误差：', true_b - b)
+```
 
+## 3.4Softmax回归
 
+> 回归可以用于预测*多少*的问题。 比如预测房屋被售出价格，或者棒球队可能获得的胜场数，又或者患者住院的天数。
+>
+> 事实上，我们也对*分类*问题感兴趣：不是问“多少”，而是问“哪一个”：
+>
+> - 某个电子邮件是否属于垃圾邮件文件夹？
+> - 某个用户可能*注册*或*不注册*订阅服务？
+> - 某个图像描绘的是驴、狗、猫、还是鸡？
+> - 某人接下来最有可能看哪部电影？
+>
+> 通常，机器学习实践者用*分类*这个词来描述两个有微妙差别的问题： 1. 我们只对样本的“硬性”类别感兴趣，即属于哪个类别； 2. 我们希望得到“软性”类别，即得到属于每个类别的概率。 这两者的界限往往很模糊。其中的一个原因是：即使我们只关心硬类别，我们仍然使用软类别的模型。
 
+### 3.4.1分类问题
 
+我们从一个图像分类问题开始。 假设每次输入是一个2×2的灰度图像。 我们可以用一个标量表示每个像素值，每个图像对应四个特征x~1~,x~2~,x~3~,x~4~。 此外，假设每个图像属于类别“猫”“鸡”和“狗”中的一个。
 
+接下来，我们要选择如何表示标签。 我们有两个明显的选择：最直接的想法是选择y∈{1,2,3}， 其中整数分别代表狗猫鸡{狗,猫,鸡}。 这是在计算机上存储此类信息的有效方法。 如果类别间有一些自然顺序， 比如说我们试图预测婴儿儿童青少年青年人中年人老年人{婴儿,儿童,青少年,青年人,中年人,老年人}， 那么将这个问题转变为回归问题，并且保留这种格式是有意义的。
 
+但是一般的分类问题并不与类别之间的自然顺序有关。统计学家很早以前就发明了一种表示分类数据的简单方法：*独热编码*（one-hot encoding）。
 
+独热编码是一个向量，它的分量和类别一样多。 类别对应的分量设置为1，其他所有分量设置为0。 在我们的例子中，标签y将是一个三维向量， 其中(1,0,0)对应于“猫”、(0,1,0)对应于“鸡”、(0,0,1)对应于“狗”：$y \in \{(1,0,0), (0,1,0), (0,0,1)\}.$
 
+### 3.4.2网络架构
 
+为了估计所有可能类别的条件概率，我们需要一个有多个输出的模型，每个类别对应一个输出。
 
+为了解决线性模型的分类问题，我们需要和输出一样多的*仿射函数*（affine function）。 每个输出对应于它自己的仿射函数。 在我们的例子中，由于我们有4个特征和3个可能的输出类别， 我们将需要12个标量来表示权重（带下标的w）， 3个标量来表示偏置（带下标的b）。 下面我们为每个输入计算三个*未规范化的预测*（logit）：o~1~、o~2~和o~3~。
+$$
+o_1 &= x_1 w_{11} + x_2 w_{12} + x_3 w_{13} + x_4 w_{14} + b_1, \\
+    o_2 &= x_1 w_{21} + x_2 w_{22} + x_3 w_{23} + x_4 w_{24} + b_2, \\
+    o_3 &= x_1 w_{31} + x_2 w_{32} + x_3 w_{33} + x_4 w_{34} + b_3.
+$$
+我们可以用下图来描述这个计算过程。 与线性回归一样，SoftMax回归也是一个单层神经网络，且SoftMax回归的输出层也是全连接层。
 
+![image-20250314103922308](./d2l.assets/image-20250314103922308.png)
 
+为了更简洁地表达模型，我们仍然使用线性代数符号。 通过向量形式表达为o=Wx+b， 这是一种更适合数学和编写代码的形式。 由此，我们已经将所有权重放到一个3×4矩阵中。 对于给定数据样本的特征x， 我们的输出是由权重与输入特征进行矩阵-向量乘法再加上偏置b得到的。
 
+> Weight 3x4：每行代表一组权重
 
+### 3.4.3全连接层参数开销
 
+具体来说，对于任何具有d个输入和q个输出的全连接层， 参数开销为O(dq)，这个数字在实践中可能高得令人望而却步。 幸运的是，将d个输入转换为q个输出的成本可以减少到O(dq/n)， 其中超参数n可以由我们灵活指定，以在实际应用中平衡参数节约和模型有效性
 
+### 3.4.4Softmax运算
 
+我们希望模型的输出y^j^可以视为属于类j的概率， 然后选择具有最大输出值的类别argmax~j~y~j~作为我们的预测。 例如，如果y^1^、y^2^和y^3^分别为0.1、0.8和0.1， 那么我们预测的类别是2，在我们的例子中代表“鸡”。
 
+不能将未规范化的预测o直接视作输出。因为将线性层的输出直接视为概率时存在一些问题： 一方面，我们没有限制这些输出数字的总和为1。 另一方面，根据输入的不同，它们可以为负值。
 
+要将输出视为概率，我们必须保证在任何数据上的输出都是非负的且总和为1。 此外，我们需要一个训练的目标函数，来激励模型精准地估计概率。 例如， 在分类器输出0.5的所有样本中，我们希望这些样本是刚好有一半实际上属于预测的类别。 这个属性叫做*校准*（calibration）。
 
+softmax函数能够将未规范化的预测变换为非负数并且总和为1，同时让模型保持可导的性质。 为了完成这一目标，我们首先对每个未规范化的预测求幂，这样可以确保输出非负。 为了确保最终输出的概率值总和为1，我们再让每个求幂后的结果除以它们的总和。如下式：
+$$
+\hat{\mathbf{y}} = \text{softmax}(\mathbf{o}) \quad \text{其中} \quad \hat{y}_j = \frac{\exp(o_j)}{\sum_k \exp(o_k)}
+$$
+这里，对于所有的j总有0≤y^j^≤1。 因此，$\hat{y}$可以视为一个正确的概率分布。 SoftMax运算不会改变未规范化的预测o之间的大小次序，只会确定分配给每个类别的概率。 因此，在预测过程中，我们仍然可以用下式来选择最有可能的类别。
+$$
+\arg\max_{j} \hat{y}_j = \arg\max_{j} o_j.
+$$
+尽管softmax是一个非线性函数，但softmax回归的输出仍然由输入特征的仿射变换决定。 因此，softmax回归是一个*线性模型*（linear model）。
 
+### 3.4.5小批量样本的矢量化
 
+为了提高计算效率并且充分利用GPU，我们通常会对小批量样本的数据执行矢量计算。 假设我们读取了一个批量的样本X， 其中特征维度（输入数量）为d，批量大小为n。 此外，假设我们在输出中有q个类别。 那么小批量样本的特征为$X \in \mathbb{R}^{n \times d}$， 权重为$W \in \mathbb{R}^{d \times q}$， 偏置为$b\in \mathbb{R}^{1\times q}$。SoftMax回归的矢量计算表达式为：
+$$
+O = XW + b\\
+\hat{Y} = \text{softmax}(O)
+$$
+相对于一次处理一个样本， 小批量样本的矢量化加快了和X和W的矩阵-向量乘法。 由于X中的每一行代表一个数据样本， 那么SoftMax运算可以*按行*（row wise）执行： 对于O的每一行，我们先对所有项进行幂运算，然后通过求和对它们进行标准化。 XW+b的求和会使用广播机制， 小批量的未规范化预测O和输出概率$\hat{y}$都是形状为n×q的矩阵。
 
+> X: n x d，则每行是一个数据
+>
+> W：d x q，每列对应一组向量
+>
+> O:每行是一组数据对应的结果
 
+### 3.4.6损失函数
 
+接下来，我们需要一个损失函数来度量预测的效果。 我们将使用最大似然估计。
+
+#### 3.4.6.1对数似然
+
+SoftMax函数给出了一个向量， 我们可以将其视为“对给定任意输入x的每个类的条件概率”。 例如，$\hat{y}_1 = P(y = \text{猫} \mid X)$。 假设整个数据集{X,Y}具有n个样本， 其中索引i的样本由特征向量x^(i)^和独热标签向量y^(i)^组成。 我们可以将估计值与实际值进行比较：
+$$
+P(Y \mid X) = \prod_{i=1}^{n} P(y^{(i)} \mid x^{(i)})
+$$
+
+> 左式是在X的情况下Y的概率。X有n个样本，所以就是每个样本情况下对应标签概率的连乘
+
+根据最大似然估计，我们最大化P(Y∣X)，相当于最小化负对数似然：
+$$
+-\log P(Y \mid X) = \sum_{i=1}^{n} -\log P(y^{(i)} \mid x^{(i)}) = \sum_{i=1}^{n} l(y^{(i)}, \hat{y}^{(i)}).
+$$
+其中，对于任何标签y和模型预测$\hat{y}$，损失函数为：
+$$
+l(y, \hat{y}) = - \sum_{j=1}^{q} y_j \log \hat{y}_j
+$$
+该损失函数通常被称为*交叉熵损失*（cross-entropy loss）。由于y是一个长度为q的独热编码向量，所以除了一个项以外的所有项j都消失了。 由于所有$\hat{y}$都是预测的概率，所以它们的对数永远不会大于0。因此，如果正确地预测实际标签，即如果实际标签P(y∣x)=1，则损失函数不能进一步最小化。 注意，这往往是不可能的。 例如，数据集中可能存在标签噪声（比如某些样本可能被误标）， 或输入特征没有足够的信息来完美地对每一个样本分类。
+
+#### 3.4.6.2Softmax及其导数
+
+$$
+l(y, \hat{y}) = - \sum_{j=1}^{q} y_j \log \frac{\exp(o_j)}{\sum_{k=1}^{q} \exp(o_k)}\\
+= \sum_{j=1}^{q} y_j \log \sum_{k=1}^{q} \exp(o_k) - \sum_{j=1}^{q} y_j o_j\\
+= \log \sum_{k=1}^{q} \exp(o_k) - \sum_{j=1}^{q} y_j o_j.
+$$
+
+> 网站里没讲，但我认为利用one-hot-encoding的性质，还可以继续化简为：
+> $$
+> = \log \sum_{k=1}^{q} \exp(o_k) - y_io_i (y_i=1)
+> $$
+
+考虑相对于任何未规范化的预测o~j~的导数，我们得到：
+$$
+\frac{\partial l(y, \hat{y})}{\partial o_j}= \frac{\exp(o_j)}{\sum_{k=1}^{q} \exp(o_k)} - y_j = \text{softmax}(o)_j - y_j.
+$$
+换句话说，导数是我们SoftMax模型分配的概率与实际发生的情况（由独热标签向量表示）之间的差异。 从这个意义上讲，这与我们在回归中看到的非常相似， 其中梯度是观测值y和估计值$\hat{y}$之间的差异。 这不是巧合，在任何指数族分布模型中 ，对数似然的梯度正是由此得出的。 这使梯度计算在实践中变得容易很多。
+
+#### 3.4.6.3交叉熵损失
+
+现在让我们考虑整个结果分布的情况，即观察到的不仅仅是一个结果。 对于标签y，我们可以使用与以前相同的表示形式。 唯一的区别是，我们现在用一个概率向量表示，如(0.1,0.2,0.7)， 而不是仅包含二元项的向量(0,0,1)。
+
+ 我们使用来$l(y, \hat{y}) = - \sum_{j=1}^{q} y_j \log \hat{y}_j$定义损失l， 它是所有标签分布的预期损失值。 此损失称为*交叉熵损失*（cross-entropy loss），它是分类问题最常用的损失之一。 本节我们将通过介绍信息论基础来理解交叉熵损失。 
+
+### 3.4.7信息论基础
+
+> 看不懂，感觉也不太重要，略去
+
+### 3.4.8模型预测与评估
+
+在训练SoftMax回归模型后，给出任何样本特征，我们可以预测每个输出类别的概率。
+
+通常我们使用预测概率最高的类别作为输出类别。 如果预测与实际类别（标签）一致，则预测是正确的。 在接下来的实验中，我们将使用*精度*（accuracy）来评估模型的性能。 精度等于正确预测数与预测总数之间的比率。
+
+## 3.5图像分类数据集
+
+我们将使用Fashion-MNIST数据集。
+
+```python
+import torch
+import torchvision
+from torch.utils import data
+from torchvision import transforms
+from d2l import torch as d2l
+```
+
+ ### 3.5.1读取数据集
+
+我们可以通过框架中的内置函数将Fashion-MNIST数据集下载并读取到内存中。
+
+```python
+# 通过ToTensor实例将图像数据从PIL类型变换成32位浮点数格式，
+# 并除以255使得所有像素的数值均在0～1之间
+trans = transforms.ToTensor()
+mnist_train = torchvision.datasets.FashionMNIST(
+    root="../data", train=True, transform=trans, download=True)
+mnist_test = torchvision.datasets.FashionMNIST(
+    root="../data", train=False, transform=trans, download=True)
+```
+
+Fashion-MNIST由10个类别的图像组成， 每个类别由*训练数据集*（train dataset）中的6000张图像 和*测试数据集*（test dataset）中的1000张图像组成。 因此，训练集和测试集分别包含60000和10000张图像。 测试数据集不会用于训练，只用于评估模型性能。
+
+> ```python
+> torchvision.datasets.FashionMNIST()
+> ```
+>
+> 该句中的train参数，当train=true时，下载训练集，train=false时，下载测试集。
+
+每个输入图像的高度和宽度均为28像素。 数据集由灰度图像组成，其通道数为1。 为了简洁起见，本书将高度h像素、宽度w像素图像的形状记为h×w或（h,w）。
+
+```python
+mnist_train[0][0].shape
+```
+
+```
+torch.Size([1, 28, 28])
+```
+
+Fashion-MNIST中包含的10个类别，分别为t-shirt（T恤）、trouser（裤子）、pullover（套衫）、dress（连衣裙）、coat（外套）、sandal（凉鞋）、shirt（衬衫）、sneaker（运动鞋）、bag（包）和ankle boot（短靴）。 以下函数用于在数字标签索引及其文本名称之间进行转换。
+
+```python
+def get_fashion_mnist_labels(labels):  #@save
+    """返回Fashion-MNIST数据集的文本标签"""
+    text_labels = ['t-shirt', 'trouser', 'pullover', 'dress', 'coat',
+                   'sandal', 'shirt', 'sneaker', 'bag', 'ankle boot']
+    return [text_labels[int(i)] for i in labels]
+```
+
+> ```python
+> [text_labels[int(i)] for i in labels]
+> ```
+>
+> 这里是一个列表推导式：
+>
+> [表达式 for 变量 in 可迭代对象]   
+>
+> 等价于    
+>
+> ```python
+> result = []
+> for 变量 in 可迭代对象:
+>     result.append(表达式)
+> ```
+
+创建一个函数来可视化这些样本
+
+```python
+def show_images(imgs, num_rows, num_cols, titles=None, scale=1.5):  #@save
+    """绘制图像列表"""
+    figsize = (num_cols * scale, num_rows * scale)
+    _, axes = d2l.plt.subplots(num_rows, num_cols, figsize=figsize)
+    axes = axes.flatten()
+    for i, (ax, img) in enumerate(zip(axes, imgs)):
+        if torch.is_tensor(img):
+            # 图片张量
+            ax.imshow(img.numpy())
+        else:
+            # PIL图片
+            ax.imshow(img)
+        ax.axes.get_xaxis().set_visible(False)
+        ax.axes.get_yaxis().set_visible(False)
+        if titles:
+            ax.set_title(titles[i])
+    return axes
+```
+
+> 不太想读怎么具体实现的了。参数里，`imgs`是tensor或者PIL数组，`num_rows`是有几行，`num_cols`是有几列
+
+### 3.5.2读取小批量
+
+为了使我们在读取训练集和测试集时更容易，我们使用内置的数据迭代器，而不是从零开始创建。 回顾一下，在每次迭代中，数据加载器每次都会读取一小批量数据，大小为`batch_size`。 通过内置数据迭代器，我们可以随机打乱了所有样本，从而无偏见地读取小批量。
+
+```python
+batch_size = 256
+
+def get_dataloader_workers():  #@save
+    """使用4个进程来读取数据"""
+    return 4
+
+train_iter = data.DataLoader(mnist_train, batch_size, shuffle=True,
+                             num_workers=get_dataloader_workers())
+```
+
+### 3.5.3整合所有组件
+
+现在我们定义`load_data_fashion_mnist`函数，用于获取和读取Fashion-MNIST数据集。 这个函数返回训练集和验证集的数据迭代器。 此外，这个函数还接受一个可选参数`resize`，用来将图像大小调整为另一种形状。
+
+```python
+def load_data_fashion_mnist(batch_size, resize=None):  #@save
+    """下载Fashion-MNIST数据集，然后将其加载到内存中"""
+    trans = [transforms.ToTensor()]
+    if resize:
+        trans.insert(0, transforms.Resize(resize))
+    trans = transforms.Compose(trans)
+    mnist_train = torchvision.datasets.FashionMNIST(
+        root="../data", train=True, transform=trans, download=True)
+    mnist_test = torchvision.datasets.FashionMNIST(
+        root="../data", train=False, transform=trans, download=True)
+    return (data.DataLoader(mnist_train, batch_size, shuffle=True,
+                            num_workers=get_dataloader_workers()),
+            data.DataLoader(mnist_test, batch_size, shuffle=False,
+                            num_workers=get_dataloader_workers()))
+```
+
+> 关于`trans`的操作：
+>
+> ```python
+> trans = [transforms.ToTensor()]
+> ```
+>
+> trans是一个列表，列表里有一个`transforms.ToTensor()`，用于将图像从PIL类型转换成tensor
+>
+> ```python
+> if resize:
+>         trans.insert(0, transforms.Resize(resize))
+> ```
+>
+> 如果resize!=NULL，那就在trans[0]插入`transforms.Resize(resize)`,用于改变图像大小。
+>
+> ```python
+> trans = transforms.Compose(trans)
+> ```
+>
+> `transforms.Compose()` **把多个转换组合成一个**，这样就可以 **一步执行所有转换**。
+
+下面，我们通过指定`resize`参数来测试`load_data_fashion_mnist`函数的图像大小调整功能。
+
+```python
+train_iter, test_iter = load_data_fashion_mnist(32, resize=64)
+for X, y in train_iter:
+    print(X.shape, X.dtype, y.shape, y.dtype)
+    break
+```
+
+```
+torch.Size([32, 1, 64, 64]) torch.float32 torch.Size([32]) torch.int64
+```
+
+## 3.6Softmax回归的从零开始实现
+
+就像我们从零开始实现线性回归一样， 我们认为softmax回归也是重要的基础，因此应该知道实现softmax回归的细节。 本节我们将使用刚刚在3.5节中引入的Fashion-MNIST数据集， 并设置数据迭代器的批量大小为256。
+
+> 但我个人认为，现在基本都直接调包，掌握如何实现Softmax意义不大，所以本节笔记可能较为简略。
+
+```python
+import torch
+from d2l import torch as d2l
+
+batch_size = 256
+train_iter, test_iter = d2l.load_data_fashion_mnist(batch_size)
+```
+
+### 3.6.1初始化模型参数
+
+和之前线性回归的例子一样，这里的每个样本都将用固定长度的向量表示。 原始数据集中的每个样本都是28×28的图像。 本节将展平每个图像，把它们看作长度为784的向量。 
+
+在SoftMax回归中，我们的输出与类别一样多。 因为我们的数据集有10个类别，所以网络输出维度为10。 因此，权重将构成一个784×10的矩阵， 偏置将构成一个1×10的行向量。 与线性回归一样，我们将使用正态分布初始化我们的权重`W`，偏置初始化为0。
+
+```python
+num_inputs = 784
+num_outputs = 10
+
+W = torch.normal(0, 0.01, size=(num_inputs, num_outputs), requires_grad=True)
+b = torch.zeros(num_outputs, requires_grad=True)
+```
+
+### 3.6.2定义Softmax操作
+
+给定一个矩阵`X`，我们可以对所有元素求和（默认情况下）。 也可以只求同一个轴上的元素，即同一列（轴0）或同一行（轴1）。 
+
+如果`X`是一个形状为`(2, 3)`的张量，我们对列进行求和， 则结果将是一个具有形状`(3,)`的向量。 当调用`sum`运算符时，我们可以指定保持在原始张量的轴数，而不折叠求和的维度。 这将产生一个具有形状`(1, 3)`的二维张量。
+
+```python
+X = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+X.sum(0, keepdim=True), X.sum(1, keepdim=True)
+```
+
+```python
+(tensor([[5., 7., 9.]]),
+ tensor([[ 6.],
+         [15.]]))
+```
+
+实现SoftMax由三个步骤组成：
+
+1. 对每个项求幂(使用exp)
+2. 对每一行求和(小批量中每个样本是一行)，得到每个样本的规范化常数
+3. 将每一行除以这个常数，确保结果和为一。
+
+```python
+def softmax(X):
+    X_exp = torch.exp(X)
+    partition = X_exp.sum(1, keepdim=True)
+    return X_exp / partition  # 这里应用了广播机制
+```
+
+测试：
+
+```python
+X = torch.normal(0, 1, (2, 5))
+X_prob = softmax(X)
+print(X_prob,'\n',X_prob.sum(1))
+```
+
+```
+tensor([[0.0477, 0.6078, 0.1058, 0.1572, 0.0815],
+        [0.0154, 0.3511, 0.3672, 0.2073, 0.0591]]) 
+ tensor([1., 1.])
+```
+
+### 3.6.3定义模型
+
+下面的代码定义了输入如何通过网络映射到输出。 
+注意，将数据传递到模型之前，我们使用`reshape`函数将每张原始图像展平为向量。
+
+```python
+def net(X):
+    return softmax(torch.matmul(X.reshape((-1, W.shape[0])), W) + b)
+```
+
+### 3.6.4定义损失函数
+
+接下来，我们实现3.4节中引入的交叉熵损失函数。 这可能是深度学习中最常见的损失函数，因为目前分类问题的数量远远超过回归问题的数量。
 
 
 
