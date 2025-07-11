@@ -565,3 +565,115 @@ clone.load_state_dict(torch.load('mlp.params'))
 
 
 
+## 5.6.GPU
+
+在cmd中运行
+
+```cmd
+nvidia-smi
+```
+
+可查看GPU情况
+
+### 5.6.1.计算设备
+
+可以指定用于存储和计算的设备，如CPU和GPU，默认情况下张量在内存中创建，然后在CPU中计算。
+
+在Pytorch中，CPU和GPU可以用`torch.device('cpu')`和`torch.device('cuda')`表示。
+
+值得注意的是，CPU设备意味着所有物理CPU和内存，意味着Pytorch的计算将尝试使用所有CPU核心。然而，gpu设备只代表一个卡和相应的显存。如果有多个GPU，使用`torch.device(f'cuda:{i}')`表示`i`块GPU（`i`从0开始）。另外，`cuda:0`和`cuda`是等价的。
+
+可以查询可用GPU数量：
+
+```python
+torch.cuda.device_count()
+```
+
+### 5.6.2.张量与GPU
+
+我们可以查询张量所在的设备，默认情况下，张量在CPU创建。
+
+```python
+x = torch.tensor([1,2,3])
+x.device
+```
+
+需要注意的是，无论何时要对多个项进行操作，它们都必须在同一个设备上。
+
+#### 5.6.2.1.存储在GPU上
+
+定义两个函数，允许我们在不存在所需GPU的情况下执行代码：
+
+```python
+def try_gpu(i=0):
+    if torch.cuda.device_count() >= i+1:
+        return torch.device(f'cuda:{i}')
+    return torch.device('cpu')
+def try_all_gpus():
+    devices = [torch.device(f'cuda:{i}') for i in range(torch.cuda.device_count())]
+    return devices if devices else [torch.device('cpu')]
+```
+
+有几种方式可以在GPU上创建张量。
+
+例如，我们可以在张量创建时指定存储设备。
+
+```python
+X = torch.ones(2,3,device = try_gpu())
+X
+```
+
+```cmd
+tensor([[1., 1., 1.],
+        [1., 1., 1.]], device='cuda:0')
+```
+
+#### 5.6.2.2.复制
+
+假设有至少两个GPU，下面的代码会在第二个GPU上创建一个随机张量
+
+```python
+Y = torch.rand(2,3,device=try_gpu(1))
+```
+
+如果我们要计算X+Y，我们需要决定在哪里执行这个操作。
+
+如图所示，我们可以将X传输到第二个GPU并在那里执行操作。不能简单的执行X+Y，因为运行时引擎不知道该怎么做：它在同一设备上找不到数据会导致失败。
+
+![image-20250711205015562](./Chapter5.assets/image-20250711205015562.png)
+
+由于Y位于第二个GPU上，需要将X移到那里才能执行相加
+
+```python
+Z = X.cuda(1)
+```
+
+现在数据在同一个GPU上，我们可以将它们相加。
+
+如果Z已经存在于第二个CPU上，如果我们调用`Z.cuda(1)`，它将会返回Z，而不会复制并分配新内存。
+
+#### 5.6.2.3.旁注
+
+单个GPU相对运行速度较快，但是在设备（CPU、GPU和其他机器）之间传输数据比计算慢得多，这也使得并行化更加困难，因为我们必须等待数据被发送（或接收）之后才能继续进行更多的操作。
+
+此外，一次执行几个操作比代码中散步的许多单个操作可能会好得多。
+
+最后，当我们打印张量或将张量转换为NumPy格式时，如果数据不在内存中，框架会首先将他复制到内存中，这回导致额外的传输开销。
+
+### 5.6.3.神经网络与GPU
+
+类似地，神经网络模型可以指定设备。下面的代码将模型参数放在GPU上。
+
+```python
+net = nn.Sequential(nn.Linear(3,1))
+net = net.to(device=try_gpu())
+```
+
+当输入为GPU上的张量时，模型将在同一GPU上计算结果。
+
+### 5.6.4.小结
+
+- 默认情况下，数据在主内存中创建，然后使用CPU进行计算。
+- 深度学习框架要求计算的所有输入数据都在同一设备上，无论是GPU还是CPU。
+- 不经意地移动数据可能会显著降低性能。
+
