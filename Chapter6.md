@@ -338,5 +338,426 @@ torch.Size([8, 8])
 conv2d = nn.Conv2d(1,1,kernel_size=(5,3),padding = (2,1))
 ```
 
+### 6.3.2.步幅
+
+在计算互相关时，卷积窗口从输入张量的左上角开始，向右、下滑动。在前面的例子中，我们默认每次滑动一个元素。但有时为了高效计算或是缩减采样次数，卷积窗口可以跳过中间位置每次滑动多个元素。
+
+我们将每次滑动元素的数量称为***步幅***（stride）。如图，采取垂直步幅为3，水平步幅为2的二维互相关运算：
+
+![image-20250716122048570](./Chapter6.assets/image-20250716122048570.png)
+
+着色部分是输出元素以及用于输出计算的输入和内核张量元素。
+
+可以看到，计算输出中第一列的第二个元素和第一行的第二个元素，卷积窗口分别向下滑动三行/向右滑动两列。但当卷积窗口继续向右滑动两列时，没有输出，因为输入元素无法填充窗口。
+
+通常，当垂直步幅为$s_h$，水平步幅为$s_w$时，输出形状为：
+$$
+\lfloor(n_h - k_h +p_h+s_h)/s_h \rfloor \times \lfloor(n_w-k_w+p_w+s_w)/s_w \rfloor
+$$
+如果我们设置了$p_h = k_h- 1$和$p_w = k_w-1$，则输出形状简化为：
+$$
+\lfloor(n_h +s_h-1)/s_h \rfloor \times \lfloor(n_w +s_w-1)/s_w \rfloor
+$$
+更进一步，如果输入的高度和宽度可以被垂直和水平步幅整除，则输出形状将为：
+$$
+(n_h/s_h) \times (n_w/s_w)
+$$
+
+>$\lfloor (n_h+s_h-1)/s_h \rfloor= n_h/s_h+\lfloor(1-\frac{1}{s_h})\rfloor \\=n_h/s_h$
+>
+>水平方向同理
+
+下面将高度和宽度的步幅设置为2，从而将输入的高度和宽度减半：
+
+```python
+conv2d = nn.Conv2d(1,1,kernel_size = 3,padding = 1,stride = 2)
+X = torch.rand(size = (8,8))
+comp_conv2d(conv2d,X).shape
+```
+
+```cmd
+torch.Size([4,4])
+```
+
+接下来看一个稍微复杂的例子：
+
+```python
+conv2d  = Conv2d(1,1,kernel_size=(3,5),padding =(0,1),stride=(3,4))
+comp_conv2d(conv2d,X).shape
+```
+
+```cmd
+torch.Size([2,2])
+# (8-3+0+3)/3=2,(8-5+1+4)/3=2
+```
+
+为了简洁起见，当输入高度和宽度的两侧填充数量分别是$p_h$和$p_w$时，我们称之为填充$(p_h,p_w)$，当$p_h=p_w=p$时，填充是$p$。同理，当高度和宽度上的步幅分别为$s_h$和$s_w$时，我们称之为步幅$(s_h,s_w)$。特别地，当$s_h=s_w=s$时，我们称步幅为$s$。默认情况下，填充为0步幅为1，实践中很少采用不一致的步幅或填充。
+
+### 6.3.3.小结
+
+- 填充和步幅都是卷积层的超参数。
+
+- 填充可以增加输出的高度和宽度，通常用来使输出与输入具有相同的高和宽。
+- 步幅可以减小输出的高和宽。
+- 填充和步幅可以有效地调整数据的维度。
+
+
+
+## 6.4.多输入多输出通道
+
+目前为止，仅展示了单个输入和单个输出通道的简化例子，这使得我们可以将输入、卷积核和输出可以看作二维张量。当我们添加通道时，我们的输入和隐藏表示都变成了三维张量。例如每个RGB输入图像具有$3 \times h \times w$的形状。我们将这个大小为3的轴称为***通道***（channel）维度。
+
+### 6.4.1.多输入通道
+
+当输入包含多个通道时，需要构造一个与输入数据具有相同输入通道数的卷积核，以便与输入数据进行互相关运算。
+
+假设输入的通道数为$c_i$，那么卷积核的输入通道数也需要$c_i$。如果卷积核的窗口形状是$k_h \times k_w$，那么当$c_i=1$时，我们可以将卷积核看作形状为$k_h \times k_w$的二维张量。
+
+当$c_i>1$时，卷积核的每个输入通道将包含形状为$k_h \times k_w$的张量。将这些张量$c_i$连结在一起可以得到形状为$c_i \times k_h \times k_w$的卷积核。由于输入和卷积核都有$c_i$个通道。我们可以对每个通道输入的二维张量和卷积核的二维张量进行互相关运算，再对通道求和得到二维张量。这是多通道输入和多输入通道卷积核之间进行二维运算的结果。
+
+如图：
+
+![image-20250716131833338](./Chapter6.assets/image-20250716131833338.png)
+
+接下来我们实现多输入通道互相关运算。简而言之，所做的是对每个通道进行互相关运算然后将结果累加：
+
+```python
+import torch
+from d2l import torch as d2l
+def corr2d_multi_in(X,K):
+    return sum(d2l.corr2d(x,k) for x,k in zip(X,K))
+```
+
+### 6.4.2.多输出通道
+
+在最流行的神经网络架构中，随着神经网络层数的加深，我们常会增加输出通道的维数，通过减少空间分辨率以获得更大的通道深度。
+
+直观地讲，我们可以将每个通道看作对不同特征的响应。但实际情况可能更复杂，因为每个通道不是独立学习的，而是为了共同使用而优化的。因此多输出通道并不仅仅是学习多个单通道的检测器。
+
+> 每个输出通道可以识别特定模式
+>
+> 输入通道核 识别并组合输入中的模式
+
+用$c_i$和$c_o$分别表示输入和输出通道的数目，并让$k_h$和$k_w$为卷积核的高度和宽度。为了获得多个通道的输出，我们可以为每个输出通道创建一个形状为$c_i \times k_h \times k_w$的卷积核张量，这样卷积核的形状应该是$c_o\times c_i\times k_h\times k_w$。在互相关运算中，每个输出通道先获取所有输入通道，再以对应该输出通道的卷积核计算出结果。
+
+```python
+def corr2d_multi_in_out(X,K):
+    return torch.stack([corr2d_multi_in(X,k) for k in K],0)
+```
+
+### 6.4.3. 1x1卷积层
+
+$1\times 1$卷积，即$k_h=k_w=1$，看起来意义不大，因为卷积的本质是有效提取相邻像素间的相关特征，而$1\times 1$显然没有这种作用。尽管如此，$1\times 1$卷积层仍然十分流行，经常包含在复杂深层网络的设计中，下面来解读他的实际作用。
+
+因为使用了最小窗口，$1\times 1$卷积层失去了在高度和宽度维度上识别相邻元素间互相作用的能力。其实$1\times1$卷积的唯一计算发生在通道上。
+
+如图，展示了使用$1\times1$卷积层与3个输入通道和2个输出通道的互相关运算：
+
+![image-20250716133740019](./Chapter6.assets/image-20250716133740019.png)
+
+这里输入和输出具有相同的高度和宽度，输出中的每个元素都是从输入图像中同一位置的元素的线性组合。我们可以将$1\times1$卷积层看作在每个像素位置应用全连接层，以$c_i$个输入值转换为$c_o$个输出值。
+
+因为这仍是一个卷积层，所以跨像素的权重是一致的。同时，$1\times1$卷积层所需要的权重维度为$c_o\times c_i$，再额外添加一个偏置。
+
+> $1\times 1$卷积层的作用是融合不同输入通道的信息
+>
+> 相当于输入形状为$c_i\times n_hn_w$，权重为$c_o\times c_i$的全连接层
+
+### 6.4.4.小结
+
+- 输出通道数是卷积层的超参数
+- 每个输入通道都有独立的二维卷积核，所有通道结果相加得到一个输出通道结果
+- 每个输出通道有独立的三维卷积核
+- 当以每像素为基础应用时，$1\times1$卷积层相当于全连接层
+- $1\times1$卷积层常用于调整网络层的通道数量和控制模型复杂性
+
+对于二维卷积层：
+
+- 输入$\mathbf{X}$：$c_i\times n_h \times n_w$
+- 核$\mathbf{W}$：$c_o\times c_i\times k_h \times k_w$
+- 偏差$\mathbf{B}$：$c_o$
+- 输出$\mathbf{Y}$：$c_o\times m_h\times m_w$
+
+
+
+## 6.5.汇聚层
+
+通常当我们处理图像时，希望逐渐降低隐藏表示的空间分辨率、聚集信息，这样随着我们在神经网络中层叠的上升，每个神经元对其敏感的感受野（输入）就越大。
+
+我们的机器学习任务通常跟全局图像的问题有关，所以我们最后一层的神经元应该对整个输入的全局敏感。通过逐渐聚合信息，生成越来越粗糙的映射，最终实现学习全局表示的目标，同时将卷积图层的所有优势保留在中间层。
+
+此外，当检测较底层的特征时，我们通常希望这些特征保持某种程度的平移不变性。例如，如果我们拍摄黑白之间轮廓清晰的图像X，并将整个图像向右移动一个像素，则新图像的输出可能大不相同。在现实中，随着拍摄角度的移动，任何物体几乎不可能发生在同一像素上。
+
+本节介绍汇聚(pooling)层，它具有双重目的：降低卷积层对位置的敏感性，同时降低对空间采样表示的敏感性。
+
+### 6.5.1.最大汇聚层和平均汇聚层
+
+与卷积层类似，汇聚层运算符由一个固定形状的窗口组成，该窗口根据其步幅大小在输入的所有区域上滑动，为窗口（称为汇聚窗口）遍历的每个位置计算一个输出。
+
+不同于卷积层中的输入与卷积核的互相关运算，汇聚层不包含参数。池运算是确定性的，我们通常计算汇聚窗口中所有元素的最大值或平均值。这些操作分别称为最大汇聚层(maximum pooling)和平均汇聚层(average pooling)。
+
+在这两种情况下，与互相关运算符一样，汇聚窗口从输入张量的左上角开始，从左往右、从上往下的在输入张量内滑动。在汇聚窗口到达的每个位置，它计算该窗口中输入子张量的最大值或平均值。
+
+汇聚窗口形状为$p \times q$的汇聚层称为$p \times q$汇聚层，汇聚操作称为$p\times q$汇聚。
+
+下面的`pool2d`函数，我们实现汇聚层的前向传播。
+
+```python
+import torch
+from torch import nn
+def pool2d(X, pool_size,mode='max'):
+    p_h , p_w = pool_size
+    Y = torch.zeros((X.shape[0]-p_h+1,X.shape[1]-p_w+1))
+    for i in range(Y.shape[0]):
+        for j in range(Y.shape[1]):
+            if mode == 'max':
+                Y[i,j] = X[i:i+p_h,j:j+p_w].max()
+            else mode == 'avg':
+                Y[i,j] = X[i:i+p_h,j:j+p_w].max()
+    return Y            
+```
+
+### 6.5.2.填充和步幅
+
+与卷积层一样，汇聚层也可以改变输出形状。和以前一样，我们可以通过填充和步幅以获得所需的输出形状。
+
+下面我们用深度学习框架内置的二维最大汇聚层来演示汇聚层中填充和步幅的使用。我们首先构造了一个输入张量X,它有四个维度，其中样本数和通道数都是1。
+
+```python
+X = torch.arange(16,dtype = torch.float32).reshape((1,1,4,4))
+```
+
+默认情况下，深度学习框架中的步幅与汇聚窗口的大小相同（意味着无重叠），因此，如果我们使用形状为$(3,3)$的汇聚窗口，那么默认情况下，我们得到的步幅形状为$(3,3)$。
+
+```python
+pool2d = nn.MaxPool2d(3)
+pool2d(X)
+```
+
+```cmd
+tensor([[[[10.]]]])
+```
+
+填充和步幅也可以手动设定：
+
+```python
+pool2d = nn.MaxPool2d(3,padding=1,stride=2)
+pool2d(X)
+```
+
+```cmd
+tensor([[[[ 5.,  7.],
+          [13., 15.]]]])
+```
+
+我们也可以设定一个任意大小的矩形汇聚窗口，并分别设定填充和步幅的高度和宽度。
+
+```python
+pool2d = nn.MaxPool2d((2,3),stride=(2,3),padding=(0,1))
+pool2d(X)
+```
+
+```cmd
+tensor([[[[ 5.,  7.],
+          [13., 15.]]]])
+```
+
+> 公式：$\lfloor(n_{in}-n_{window}+p+s)/2 \rfloor$
+
+### 6.5.3.多个通道
+
+在处理多通道输入数据时，汇聚层在每个输入通道上单独运算，而不是像卷积层一样在通道上对输入进行汇总。因此汇聚层的输出通道数和输入通道数相同。
+
+
+
+### 6.5.4.小结
+
+- 对于给定输入元素，最大汇聚层会输出该窗口内的最大值，平均汇聚层会输出该窗口内的平均值。
+- 汇聚层的主要优点之一是减轻卷积层对位置的过度敏感。
+- 汇聚层的输出通道和输入通道一致。
+- 汇聚层同样有窗口大小、填充和步幅作为超参数。
+
+
+
+# 6.6.卷积神经网络(LeNet)
+
+前几节，我们学习构建了一个完整卷积神经网络的所需组件。
+
+回想一下，之前我们将softmax回归模型和多层感知机模型应用于Fashion-MINIST数据集的服装图片，为了能够应用softmax回归和MLP，我们首先将每个28x28的图片展平为784维的固定长度的一维向量，然后用全连接层进行处理。
+
+现在掌握了卷积层，我们可以在图像中保留空间结构，同时模型更简洁，所需参数更少。
+
+本节将介绍LeNet，它是最早发布的卷积神经网络之一，目的是识别图像中的手写数字。
+
+### 6.6.1.LeNet
+
+总体来看，LeNet（LeNet-5）由两个部分组成：
+
+- 卷积编码器：由两个卷积层组成；
+- 全连接层密集块：由三个全连接层组成。
+
+如图：
+
+![image-20250716183009562](./Chapter6.assets/image-20250716183009562.png)
+
+每个卷积块的基本单元是一个卷积层、一个sigmoid函数和平均汇聚层。
+
+> ReLU和最大汇聚层更有效，但在那个年代还没出现。
+
+每个卷积层采用$5\times5$卷积核和一个sigmoid激活函数，这些层将输入映射到多个二维特征输出，通常同时增加通道的数量。第一卷积层有6个输出通道，而第二个卷积层有16个输出通道。每个$2\times2$池操作（步幅为2）通过空间下采样将维数减少4倍。卷积的输出形状由批量大小、通道数、高度、宽度决定。
+
+> (28-2+0+2)/2=14
+
+为了将卷积块的输出传递给稠密块，我们必须在小批量里展平每个样本。换言之，我们将这个四维输入转换成全连接层期望的二维输入。
+
+这里的二维表示，第一个维度索引小批量中的样本，第二个维度给出每个样本的平面向量表示。
+
+LeNet的稠密块有三个全连接层，分别有120、84、10个输出，因为在执行分类任务，所以输出层的10维对应于最后输出结果的数量。
+
+用深度学习框架来实现：
+
+```python
+import torch
+from torch import nn
+net = nn.Sequential(
+    nn.Conv2d(1,6,kernel_size = 5,padding = 2),
+    nn.Sigmoid(),
+    nn.AvgPool2d(kernel_size = 2,stride = 2),
+    nn.Conv2d(6,16,kernel_size=5),
+    nn.Sigmoid(),
+    nn.AvgPool2d(kernel_size=2,stride=2),
+    nn.Flatten(),
+    nn.Linear(16*5*5,120),
+    nn.Sigmoid(),
+    nn.Linear(120,84),
+    nn.Sigmoid(),
+    nn.Linear(84,10)
+)
+```
+
+我们对原始的模型做了一些改动，去掉了最后一层的高斯激活，除此之外这个网络与最初的LeNet-5一致。
+
+接下来检查通过每一层后的张量形状：
+
+```python
+X = torch.rand(size = (1,1,28,28),dtype = torch.float32)
+for layer in net:
+    X = layer(X)
+    print(layer.__class__.__name__,'output shape:\t',X.shape)
+```
+
+```cmd
+Conv2d output shape:     torch.Size([1, 6, 28, 28])
+Sigmoid output shape:    torch.Size([1, 6, 28, 28])
+AvgPool2d output shape:  torch.Size([1, 6, 14, 14])
+Conv2d output shape:     torch.Size([1, 16, 10, 10])
+Sigmoid output shape:    torch.Size([1, 16, 10, 10])
+AvgPool2d output shape:  torch.Size([1, 16, 5, 5])
+Flatten output shape:    torch.Size([1, 400])
+Linear output shape:     torch.Size([1, 120])
+Sigmoid output shape:    torch.Size([1, 120])
+Linear output shape:     torch.Size([1, 84])
+Sigmoid output shape:    torch.Size([1, 84])
+Linear output shape:     torch.Size([1, 10])
+```
+
+结果与预期一致。
+
+### 6.6.2.模型训练
+
+现在看看LeNet在Fashion-MNIST数据集上的表现。
+
+```python
+batch_size = 256
+train_iter,test_iter = d2l.load_data_fashion_mnist(batch_size = batch_size)
+```
+
+为了进行评估，需要对之前描述的`evaluate_accuracy`函数进行轻微修改。由于完整的数据集位于内存中，因此在模型使用GPU计算数据集之前，需要复制到显存中。
+
+```python
+def evaluate_accuracy_gpu(net,train_iter,device = None):
+    if isinstance(net,nn.Module):
+        net.eval()
+        if not device:
+            device = next(iter(net.parameters())).device
+    metric = d2l.Accumulator(2)
+    with torch.no_grad():
+        for X,y in data_iter:
+            if isinstance(X,list):
+                X = [x.to(device) for x in X]
+            else:
+                X = X.to(device)
+            y = y.to(device)
+            metric.add(d2l.accuracy(net(X),y),y.numel())
+    return metric[0]/metric[1]        
+```
+
+> `isinstance`用来判断一个`object`是不是一个类的实例
+
+为了使用GPU，还需要一点改动。与3.6.中定义的`train_epoch_ch3`不同，在进行正向和反向传播之前，需要将每一小批量数据移动到我们的指定设备上。
+
+以下训练函数从高级API创建的模型作为输入，并进行相应的优化，使用`Xavier`随机初始化模型参数，使用交叉熵损失函数和小批量随机梯度下降。
+
+```python
+#@save
+def train_ch6(net, train_iter, test_iter, num_epochs, lr, device):
+    """用GPU训练模型(在第六章定义)"""
+    def init_weights(m):
+        if type(m) == nn.Linear or type(m) == nn.Conv2d:
+            nn.init.xavier_uniform_(m.weight)
+    net.apply(init_weights)
+    print('training on', device)
+    net.to(device)
+    optimizer = torch.optim.SGD(net.parameters(), lr=lr)
+    loss = nn.CrossEntropyLoss()
+    animator = d2l.Animator(xlabel='epoch', xlim=[1, num_epochs],
+                            legend=['train loss', 'train acc', 'test acc'])
+    timer, num_batches = d2l.Timer(), len(train_iter)
+    for epoch in range(num_epochs):
+        # 训练损失之和，训练准确率之和，样本数
+        metric = d2l.Accumulator(3)
+        net.train()
+        for i, (X, y) in enumerate(train_iter):
+            timer.start()
+            optimizer.zero_grad()
+            X, y = X.to(device), y.to(device)
+            y_hat = net(X)
+            l = loss(y_hat, y)
+            l.backward()
+            optimizer.step()
+            with torch.no_grad():
+                metric.add(l * X.shape[0], d2l.accuracy(y_hat, y), X.shape[0])
+            timer.stop()
+            train_l = metric[0] / metric[2]
+            train_acc = metric[1] / metric[2]
+            if (i + 1) % (num_batches // 5) == 0 or i == num_batches - 1:
+                animator.add(epoch + (i + 1) / num_batches,
+                             (train_l, train_acc, None))
+        test_acc = evaluate_accuracy_gpu(net, test_iter)
+        animator.add(epoch + 1, (None, None, test_acc))
+    print(f'loss {train_l:.3f}, train acc {train_acc:.3f}, '
+          f'test acc {test_acc:.3f}')
+    print(f'{metric[2] * num_epochs / timer.sum():.1f} examples/sec '
+          f'on {str(device)}')
+```
+
+现在训练和评估LeNet-5模型。
+
+```python
+lr, num_epochs = 0.9, 10
+train_ch6(net, train_iter, test_iter, num_epochs, lr, d2l.try_gpu())
+```
+
+> 这段代码在终端中不能很好地运行，因为animator只能在ipynb中运行，因此无法得到曲线图
+
+### 6.6.3.小结
+
+- CNN是一类使用卷积层的网络。
+- 在卷积神经网络中，我们组合使用卷积层、非线性激活函数和汇聚层。
+- 为了构造高性能的卷积神经网络，我们通常对卷积层进行排列，逐渐降低其表示的空间分辨率，同时增加通道数。
+- 在传统的卷积神经网络中，卷积块编码得到的表征在输出之前需由一个或多个全连接层处理。
+
+
+
 
 
