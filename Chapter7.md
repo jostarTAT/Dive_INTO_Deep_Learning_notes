@@ -232,5 +232,191 @@ LeNet、AlexNet和VGG都有一个共同的设计模式：通过一系列的卷�
 
 卷积层的输入和输出由四维张量组成，张量每个轴分别对应样本、通道、高度、宽度。另外，全连接层的输入和输出通常是分别对应于样本和特征的二维张量。NiN的想法是在每个像素位置（针对每个高度和宽度）应用一个全连接层。
 
-如果我们将权重连接到每个空间位置，我们可以将其视为$1\times 1$卷积层。从另一个角度看，即将空间维度中的每个像素视为单个样本，
+如果我们将权重连接到每个空间位置，我们可以将其视为$1\times 1$卷积层。***从另一个角度看，即将空间维度中的每个像素视为单个样本，将通道维度视为不同特征(feature)***。
 
+如图，说明了VGG和NiN及它们的块之间主要架构差异。NiN块以一个普通卷积层开始，后面是两个$1\times1$的卷积层。这两个卷积层充当带有ReLU激活函数的逐像素全连接层。第一层的卷积窗口形状通常由用户设置。随后的卷积窗口形状固定为$1\times1$。
+
+![image-20250718233933878](./Chapter7.assets/image-20250718233933878.png)
+
+以下是NiN块的实现：
+
+```python
+import torch
+from torch import nn
+def nin_block(in_channels,out_channels,kernel_size,strides,padding):
+    return nn.Sequential(
+        nn.Conv2d(in_channels,out_channels,kernel_size,strides,padding),
+        nn.ReLU(),
+        nn.Conv2d(out_channels,out_channels,kernel_size=1),
+        nn.ReLU(),
+        nn.Conv2d(out_channels,out_channels,kernel_size=1),
+        nn.ReLU()
+    )
+```
+
+### 7.3.2.NiN模型
+
+最初的NiN网络是在AlexNet后不久提出的。NiN使用窗口形状为$11\times11$、$5\times5$和$3\times3$的卷积层，输出通道数与AlexNet中相同。每个NiN块后有一个最大汇聚层，汇聚窗口为$3\times3$，步幅为2。
+
+NiN和AlexNet之间的显著区别是NiN完全取消了全连接层。相反，NiN使用一个NiN块，其输出通道数等于标签类别的数量。交替使用NiN块和步幅为2的最大池化层，逐步减小高宽和增大通道数。最后放一个全局平均汇聚层(global average pooling layer)，生成一个对数几率(logits)。
+
+NiN的设计的一个优点是显著减少了模型所需的参数数量，但在实践中有时会增加训练模型的时间。
+
+这里列举一段NiN模型的代码示例：
+
+```python
+net = nn.Sequential(
+    nin_block(1,96,kernel_size=11,strides=4),
+    nn.MaxPool2d(kernel_size=3,stride=2),
+    nin_block(96,256,kernel_size=5,padding=2,strides=1),
+    nn.MaxPool2d(kernel_size=3,stride=2),
+    nin_block(256,384,kernel_size=3,padding=1,strides=1),
+    nn.MaxPool2d(kernel_size=3,stride=2),
+    nin_block(384,10,padding=1,kernel_size=3),
+    nn.AdaptiveAvgPool2d((1,1)),
+    nn.Flatten()
+)
+```
+
+### 7.3.4.小结
+
+- NiN使用由一个卷积层和多个$1\times1$卷积层组成的块。该块可以在卷积神经网络中使用，其中后续的$1\times1$卷积层为每个像素添加了非线性性。
+- NiN去除了容易造成过拟合的全连接层，将它们替换成了全局平均汇聚层（即在同一通道所有位置求和）。该汇聚层的通道数是输出数量。
+- 移除全连接层可以减轻过拟合同时减少NiN的参数。
+
+
+
+## 7.4.含并行连结的网络（GoogLeNet）
+
+GoogLeNet吸收了NiN中串联网络的思想，并在此基础上做了改进。在提出该模型的论文中的一个重点是解决了什么样大小的卷积核最为合适的问题。本文的一个观点是：有时使用不同大小的卷积核组合是有利的。
+
+本节将介绍一个稍微简化的GoogLeNet版本：省略了一些为稳定训练而添加的特殊特性，现在有了更好的训练方法，这些特性是不必要的。
+
+### 7.4.1.Inception块
+
+GoogLeNet中，基本的卷积块被称为Inception块。
+
+Inception块的基本架构如下：
+
+![image-20250719154846146](./Chapter7.assets/image-20250719154846146.png)
+
+Inception块由四条并行路线组成。前三条路线使用窗口大小为$1\times1$、$3\times3$、$5\times5$的卷积层，从不同空间大小中提取信息。中间两条路径在输入上执行$1\times1$卷积以减少通道数，从而降低模型的复杂性。第四条路径使用$3\times3$最大汇聚层，然后使用$1\times1$卷积层来改变通道数。
+
+这四条路径都使用合适的填充使得输入和输出的高、宽一致，最后我们将每条线路的输出在通道维度上连结，并构成Inception块的输出。在Inception块中，通常调整的超参数是每层输出通道数。
+
+```python
+import torch
+from torch import nn
+from torch.nn import functional as F
+class Inception(nn.Module):
+    def __init__(self,in_channels,c1,c2,c3,c4):
+        super().__init__()
+        self.p1_1 = nn.Conv2d(in_channels,c1,kernel_size=1)
+        self.p2_1 = nn.Conv2d(in_channels,c2[0],kernel_size = 1)
+        self.p2_2 = nn.Conv2d(c2[0],c2[1],kernel_size=3,padding=1)
+        self.p3_1 = nn.Conv2d(in_channels,c3[0],kernel_size=1)
+        self.p3_2 = nn.Conv2d(c3[0],c3[1],kernel_size=5,padding=2)
+        self.p4_1 = nn.MaxPool2d(kernel_size=3,padding=1)
+        self.p4_2 = nn.Conv2d(c4[0],c4[1],kernel_size=1)
+    def forward(self,X):
+        p1 = F.relu(self.p1_1(X))
+        p2 = F.relu(self.p2_2(F.relu(self.p2_1(X))))
+        p3 = F.relu(self.p3_2(F.relu(self.p3_1(X))))
+        p4 = F.relu(self.p4_2(self.p4_1(X)))
+        return torch.cat((p1,p2,p3,p4),dim=1)
+```
+
+GoogLeNet有效的原因在于滤波器的组合，可以用各种滤波器尺寸探索图像，意味着不同大小的滤波器可以有效地识别不同范围的图像细节。同时，我们也可以为不同滤波器分配不同数量的参数。
+
+### 7.4.2.GoogLeNet模型
+
+如图所示，GoogLeNet共使用9个Inception块和全局平均汇聚层堆叠来生成其估计值。如图：
+
+![image-20250719162420262](./Chapter7.assets/image-20250719162420262.png)
+
+Inception块之间的最大汇聚层可以降低维度。第一个模块类似于AlexNet和LeNet，全局平均汇聚层避免了在最后使用全连接层。
+
+> 与VGG中类似，每个模块将 
+
+第一个模块使用64个通道、$7\times 7$卷积层：
+
+```python
+b1 = nn.Sequential(
+    nn.Conv2d(1,64,kernel_size=7,padding=3,stride=2),
+    nn.ReLU(),
+    nn.MaxPool2d(kernel_size=3,stride=2,padding=1)
+)
+```
+
+第二个模块使用两个卷积层：第一个卷积层是64个通道，$1\times1$卷积层；第二个卷积层使用将通道数量增加三倍的$3\times3$卷积层。这对应Inception块中第二条路径。
+
+```python
+b2 = nn.Sequential(
+    nn.Conv2d(64,64,kernel_size=1),
+    nn.ReLU(),
+    nn.Conv2d(64,192,kernel_size=3,padding=1),
+    nn.ReLU(),
+    nn.MaxPool2d(kernel_size=3,stride=2,padding=1)
+)
+```
+
+第三个模块串联了两个完整的inception块。第一个inception块的输出通道数为：64+128+32+32=256，四个路径之前的输出通道数量之比为：2:4:1:1。第二个和第三个路径首先将输入通道的数量分别减少到96与16个，然后连接第二个卷积层。
+
+第二个inception块的输出通道数增加到128+192+96+64=480，四个路径之间的输出通道数量比是：4:6:3:2。第二条和第三条路径首先将通道数减少到128与32。
+
+则代码实现为:
+
+```python
+b3 = nn.Sequential(
+    Inception(192,64,(96,128),(16,32),32),
+    Inception(256,128,(128,192),(32,96),64),
+    nn.MaxPool2d(kernel_size=3,stride=2,padding=1)
+)
+```
+
+第四个模块串联了5个inception块，输出通道数分别是：192+208+48+64=512，160+224+64+64=512，128+256+64+64=512，112+288+64+64=528，256+320+128+128=832。这些路径的通道数分配和第三模块中类似，含$3\times3$卷积层的第二条路径输出最多通道，其次是仅含$1\times1$卷积层的第一条路径，之后是含$5\times5$卷积层的第三条路径和含$3\times3$最大汇聚层的第四条路径。其中第二、第三条路径都会先按比例减小通道数。这些比例在各个inception块中有所不同。
+
+代码实现如下：
+
+```python
+b4 = nn.Sequential(Inception(480, 192, (96, 208), (16, 48), 64),
+                   Inception(512, 160, (112, 224), (24, 64), 64),
+                   Inception(512, 128, (128, 256), (24, 64), 64),
+                   Inception(512, 112, (144, 288), (32, 64), 64),
+                   Inception(528, 256, (160, 320), (32, 128), 128),
+                   nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+```
+
+第五模块包含输出通道数为256+320+128+128=832和384+384+128+128=1024的两个inception块。其中每条路径通道数的分配思路和第三、第四模块中一致，只是具体数值上不同。
+
+需要注意的是，第五模块后面紧跟输出层，该模块同NiN一样，使用全局平均汇聚层，将每个通道的高、宽变为1。最后将输出变为二维数组，再接上一个输出个数为标签类别数的全连接层。
+
+```python
+b5 = nn.Sequential(
+    Inception(832,256,(160,320),(32,128),128),
+    Inception(832,384,(192,384),(48,128),128),
+    nn.AdaptiveAvgPool2d((1,1)),
+    nn.Flatten()
+)
+net = nn.Sequential(
+    b1,b2,b3,b4,b5,nn.Linear(1024,10)
+)
+```
+
+### 7.4.4.小结
+
+- Inception块相当于一个有4条路径的子网络。它通过不同窗口形状的卷积层和最大汇聚层来并行抽取信息，并使用$1\times1$卷积层减少每像素级别上的通道维数从而降低模型复杂度。
+- GoogLeNet的一个主要优点是模型参数小，计算复杂度低。
+- GoogLeNet将多个设计精细的Inception块与其他层（卷积层、全连接层）串联起来，其中Inception块的通道数分配之比是在ImageNet数据集上通过大量实验得来。
+
+## 7.5.批量规范化/归一化
+
+本节介绍***批量归一化***（batch normalization），这是一种流行且有效的技术，可以加速深层网络的收敛速度。再结合7.6节中介绍的残差块，使得研究人员可以训练上百层以上的神经网络。
+
+### 7.5.1.训练深层网络
+
+先回顾一下训练神经网络时出现的一些实际挑战。
+
+首先，数据预处理方式会对最终结果造成巨大影响。以使用MLP来预测房价的例子为例。使用真实数据时，我们的第一步是标准化输入特征，使其***均值为0，方差为1***。直观地说，这种标准化可以很好地与我们的优化器配合使用，因为它可以将参数的量级进行统一。
+
+第二，对于典型的MLP或CNN，训练时，中间层的变量可能具有更广的变化范围。批量归一化的发明者非正式地假设，这些变量分布中的这种偏移（协变量偏移）可能会阻碍网络的收敛。
