@@ -409,6 +409,8 @@ net = nn.Sequential(
 - GoogLeNet的一个主要优点是模型参数小，计算复杂度低。
 - GoogLeNet将多个设计精细的Inception块与其他层（卷积层、全连接层）串联起来，其中Inception块的通道数分配之比是在ImageNet数据集上通过大量实验得来。
 
+
+
 ## 7.5.批量规范化/归一化
 
 本节介绍***批量归一化***（batch normalization），这是一种流行且有效的技术，可以加速深层网络的收敛速度。再结合7.6节中介绍的残差块，使得研究人员可以训练上百层以上的神经网络。
@@ -419,4 +421,373 @@ net = nn.Sequential(
 
 首先，数据预处理方式会对最终结果造成巨大影响。以使用MLP来预测房价的例子为例。使用真实数据时，我们的第一步是标准化输入特征，使其***均值为0，方差为1***。直观地说，这种标准化可以很好地与我们的优化器配合使用，因为它可以将参数的量级进行统一。
 
-第二，对于典型的MLP或CNN，训练时，中间层的变量可能具有更广的变化范围。批量归一化的发明者非正式地假设，这些变量分布中的这种偏移（协变量偏移）可能会阻碍网络的收敛。
+第二，对于典型的MLP或CNN，训练时，中间层的变量可能具有更广的变化范围。批量归一化的发明者非正式地假设，这些变量分布中的这种偏移（协变量偏移）可能会阻碍网络的收敛。     
+
+第三，深层的神经网络很复杂，容易过拟合，意味着正则化变得更重要。
+
+批量归一化应用于单个可选层（也可以应用到所有层），原理如下：在每次训练迭代中，首先规范化输入，即通过减去其均值并除以其标准差，其中两者基于当前小批量处理。接下来，应用比例系数和比例偏移。正是由于这个基于批量统计的标准化，才有了批量规范化的名称。
+
+应该注意的是，如果我们尝试使用大小为1的小批量应用批量归一化，我们将无法学习到任何东西。这是因为在减去均值后，每个隐藏单元都是0。所以，***只有使用足够大的小批量，批量归一化这种方法才是有效且稳定的。***在应用批量归一化时，批量大小的选择可能比没有批量归一化时更加重要。
+
+从形式上说，用$\mathbf{x} \in \mathcal{B}$表示一个来自小批量$\mathcal{B}$的输入，批量归一化BN根据以下表达式转换$\mathbf{x}$：
+$$
+\mathrm{BN}(\mathbf{x}) = \boldsymbol{\gamma} \odot \frac{\mathbf{x} - \hat{\boldsymbol{\mu}}_\mathcal{B}}{\hat{\boldsymbol{\sigma}}_\mathcal{B}} + \boldsymbol{\beta}.
+$$
+在该式中，$\hat{\boldsymbol{\mu}}_\mathcal{B} $是小批量$\mathcal{B}$的样本均值，$\hat{\boldsymbol{\sigma}}_\mathcal{B}$是小批量$\mathcal{B}$的样本标准差。应用标准化后，生成的小批量的平均值为0和单位方差为1。在这个式子中，还包含了拉伸参数（scale）$\gamma$和偏移参数（shift）$\beta$，它们的形状与$\mathbf{x}$相同。$\gamma$、$\beta$都是需要与其他模型参数一起学习的参数。
+
+由于在训练过程中，中间层的变化幅度不能太剧烈，而批量归一化将每层主动居中，并将它们重新调整为给定的均值和大小（通过$\hat{\boldsymbol{\mu}}_\mathcal{B}$和$\hat{\boldsymbol{\sigma}}_\mathcal{B}$）。
+
+从形式上来讲，计算出$\hat{\boldsymbol{\mu}}_\mathcal{B}$和$\hat{\boldsymbol{\sigma}}_\mathcal{B}$：
+$$
+\begin{split}\begin{aligned} \hat{\boldsymbol{\mu}}_\mathcal{B} &= \frac{1}{|\mathcal{B}|} \sum_{\mathbf{x} \in \mathcal{B}} \mathbf{x},\\
+\hat{\boldsymbol{\sigma}}_\mathcal{B}^2 &= \frac{1}{|\mathcal{B}|} \sum_{\mathbf{x} \in \mathcal{B}} (\mathbf{x} - \hat{\boldsymbol{\mu}}_{\mathcal{B}})^2 + \epsilon.\end{aligned}\end{split}
+$$
+我们在方差估计值里添加一个小的常量$\epsilon>0$，以确保永远不会尝试除以零。估计值$\hat{\boldsymbol{\mu}}_\mathcal{B}$与${\hat{\boldsymbol{\sigma}}_\mathcal{B}}$通过使用平均值与方差的噪声估计来抵消缩放问题。
+
+由于尚未在理论上明确的原因，优化中的各种噪声源通常会导致更快的训练和较少的过拟合：这种变化似乎是正则化的一种形式。
+
+另外，批量归一化层在“训练模式”和“预测模式”中的功能不同。在训练过程中，我们无法使用整个数据集来估计平均值和方差，所以只能根据每个小批量的平均值和方差不断训练模型；而在预测模式下，可以根据整个数据集精确计算批量归一化所需的平均值和方差。
+
+> 这里不太懂，具体是什么意思。
+>
+> 在我的理解里，大概是讲：在训练模式时，批量的平均值、方差是根据小批量里的数据计算出来的。而在这一过程中，BN层还会维护两个mean和var变量。具体更新公式为：
+> $$
+> mean = mean\times \alpha + mean_{current\ batch}\times (1-\alpha)\\
+> var = var\times \beta + var_{current \ batch }\times (1-\beta)
+> $$
+> 其中的$\alpha,\beta$都是超参数，在pytorch框架中默认为0.9。
+>
+> 在预测模式中，使用的是这里维护的mean和var。
+
+### 7.5.2.批量归一化层
+
+批量归一化与其他层的一个关键区别在于，批量归一化在完整的小批量上运行，因此不能像引入其他层那般忽略批量大小。
+
+下面讨论全连接层和卷积层的情况，它们的批量归一化实现略有不同。
+
+#### 7.5.2.1.全连接层
+
+通常，我们将批量归一化层置于全连接层中的仿射变换与激活函数之间。
+
+设全连接层的输入为$x$，权重参数和偏置参数为$\mathbf{W}$和$\mathbf{b}$，激活函数为$\phi$，批量归一化的运算符为BN。那么使用批量归一化的全连接层的输出的计算如下：
+$$
+\mathbf{h}=\phi(BN(\mathbf{W}x+\mathbf{b}))
+$$
+
+#### 7.5.2.2.卷积层
+
+对于卷积层，我们可以在卷积层之后和激活函数之前应用批量归一化。
+
+当卷积有多个输出通道时，我们需要对这些通道的“每个”输出执行批量归一化，每个通道有自己的拉伸(scale)和偏移(shift)参数，这两个参数都是标量。
+
+假设我们的小批量包含m个样本，并且对于每个通道，卷积的输出具有高度p和宽度q。那么对于卷积层，我们在每个输出通道的$m\times p\times q$个元素上同时执行批量规范化。因此在计算平均值和方差时，我们会收集所有空间位置的值，然后在给定通道内应用相同的均值和方差，以便在每个空间位置对值进行规范化。
+
+#### 7.5.2.3.预测过程中的批量归一化
+
+正如之前提到的，批量归一化在训练模式与预测模式的行为通常不同。
+
+首先，将训练好的模型用于预测时，我们不再需要样本均值中的噪声以及在微批次上估计每个小批次产生的样本方差了。
+
+其次，我们可能需要使用我们的模型对逐个样本进行预测。一种常用的方式是通过移动平均估算整个训练数据集的样本均值与方差，并在预测时使用它们得到确定的输出。
+
+### 7.5.3.从零实现
+
+接下来，我们从零实现一个具有张量的批量归一化层。
+
+```python
+def batch_norm(X,gamma,beta,moving_mean,moving_var,eps,momentum):
+    if not torch.is_grad_enabled():
+        x_hat = (X-moving_mean)/torch.sqrt(moving_var+eps)
+    else:
+        assert len(X.shape) in (2,4)
+        if len(X.shape) == 2:
+            mean = X.mean(dim = 0)
+            var = ((X-mean)**2).mean(dim=0)
+        else:
+            mean = X.mean(dim = (0,2,3),keepdim=True)
+            var = ((X-mean)**2).mean(dim=(0,2,3),keepdim=True)
+        x_hat = (X-mean)/torch.sqrt(var+eps)
+        moving_mean = momentum*moving_mean+(1.0-momentum)*mean
+        moving_var = momentum*moving_var+(1.0-momentum)*var
+    Y = gamma * x_hat + beta
+    return Y,moving_mean.data,moving_var.data
+```
+
+我们现在可以创建一个正确的BatchNorm层。这个层将保持适当的参数：拉伸gamma和偏移beta，这两个参数在训练过程中更新。除此之外，我们的层将保存均值和方差的移动平均值。
+
+撇开算法细节，注意我们实现层的基础设计模式。
+
+通常，我们用一个单独的函数定义其数学原理（如batch_norm）。然后，我们将此功能集成到一个自定义层中，其代码主要处理数据移动到训练设备（如GPU）、分配和初始化任何必须的变量、跟踪移动平均线等问题。为了方便起见，这里假设可以自动推断输入形状，因此需要指示整个特征的数量。
+
+```python
+class BatchNorm(nn.Module):
+    def __init__(self,num_features,num_dims):
+        super().__init__()
+        if num_dims == 2:
+            shape = (1,num_features)
+        else:
+            shape = (1,num_features,1,1)
+        self.gamma = nn.Parameter(torch.ones(shape))
+        self.beta = nn.Parameter(torch.zeros(shape))
+        self.moving_mean = torch.zeros(shape)
+        self.moving_var = torch.ones(shape)
+    def forward(self,X):
+        if self.moving_mean.device!=X.device:
+            self.moving_mean = self.moving_mean.to(X.device)
+            self.moving_var = self.moving_var.to(X.device)
+        Y,self.moving_mean,self.moving_var = batch_norm(X,self.gamma,self.beta,
+                                                        self.moving_mean,self.moving_var,1e-5,0.9)
+        return Y    
+```
+
+### 7.5.4.使用批量归一化层的LeNet
+
+```python
+net = nn.Sequential(
+    nn.Conv2d(1,6,kernel_size=5),
+    BatchNorm(6,4),
+    nn.Sigmoid(),
+    nn.AvgPool2d(kernel_size=2,stride=2),
+    nn.Conv2d(6,16,kernel_size=5),
+    BatchNorm(16,num_dims=4),
+    nn.Sigmoid(),
+    nn.AvgPool2d(kernel_size=2,stride=2),
+    nn.Flatten(),
+    nn.Linear((16*4*4,120)),
+    BatchNorm(120,2),
+    nn.Sigmoid(),
+    nn.Linear((120,84)),
+    BatchNorm(84,num_dims=2),
+    nn.Sigmoid(),
+    nn.Linear((84,10))
+)
+```
+
+我们在Fashion-MNIST数据集上训练网络时，可以采取比之前训练LeNet时大得多的学习率。
+
+### 7.5.5.简明实现
+
+我们也可以直接使用深度学习框架中定义的BatchNorm。
+
+```python
+net = nn.Sequential(
+    nn.Conv2d(1, 6, kernel_size=5), nn.BatchNorm2d(6), nn.Sigmoid(),
+    nn.AvgPool2d(kernel_size=2, stride=2),
+    nn.Conv2d(6, 16, kernel_size=5), nn.BatchNorm2d(16), nn.Sigmoid(),
+    nn.AvgPool2d(kernel_size=2, stride=2), nn.Flatten(),
+    nn.Linear(256, 120), nn.BatchNorm1d(120), nn.Sigmoid(),
+    nn.Linear(120, 84), nn.BatchNorm1d(84), nn.Sigmoid(),
+    nn.Linear(84, 10))
+```
+
+### 7.5.6.争议
+
+直观地讲，批量归一化被认为可以使优化更加平滑。
+
+在提出批量归一化的论文中，作者介绍了其应用，还解释了其原理：通过减少内部协变量偏移。然而，这种解释是不正确的。
+
+### 7.5.7.小结
+
+- 在模型训练过程中，批量归一化利用小批量的均值与标准差，不断调整神经网络的中间输出，使得各层的中间输出值更稳定。
+- 批量归一化在全连接层和卷积层的使用上略有不同。
+- 批量归一化层和Dropout层一样，在训练模式和预测模式下表现不同。
+- 批量归一化有许多有益的副作用，主要是正则化。可以加速收敛速度，但一般不会改变模型的精度。
+
+
+
+## 7.6.残差网络（ResNet）
+
+随着我们设计越来越深的网络，深刻理解”新添加的层如何提升神经网络的性能“变得至关重要。在网络中，添加层会使网络更具表现力，为了理解这一点，我们需要一些基础数学知识。
+
+### 7.6.1.函数类
+
+假设有一类特定的神经网络架构$\mathcal{F}$，它包括学习速率和其他超参数设置。
+
+对于所有$f \in \mathcal{F}$，存在一些参数集（例如权重和偏置），这些参数可以通过在合适的数据集上进行训练获得。
+
+现在假设$f^*$是我们真正想要寻找的函数，如果$f^* \in \mathcal{F}$，那么我们可以通过训练获得它。相反，我们将尝试找到一个函数$f_{\mathcal{F}}^*$，这是我们在$\mathcal{F}$中的最佳选择。
+
+例如，给定一个具有$\mathbf{X}$特性和$\mathbf{y}$标签的数据集，我们可以尝试通过解决以下优化问题来找到它：
+$$
+f^*_\mathcal{F} := \mathop{\mathrm{argmin}}_f L(\mathbf{X}, \mathbf{y}, f) \text{ subject to } f \in \mathcal{F}.
+$$
+如何得到更近似真正$f^*$的函数呢？唯一合理的可能性是，我们需要一个更强大的架构$\mathcal{F}'$。换句话说，我们估计$f_{\mathcal{F}'}^*$比$f_{\mathcal{F}}^*$更接近。
+
+然而，如果$\mathcal{F} \notin \mathcal{F}'$，则无法保证新的体系更接近。事实上，可能会更糟。
+
+因此，只有当较复杂的函数类包含较小的函数类时，我们才能保证提高它的性能。对于深度神经网络，如果我们能将新添加的层训练成恒等映射$f(\mathbf{x})=\mathbf{x}$，则新模型与原模型同样有效。同时，由于新模型可能得出更优解来拟合数据集，因此添加层似乎更容易降低训练误差。
+
+> 这段话的意思是，新模型最差情况下，也可以达到原模型的效果
+
+针对这一问题，何恺明等人提出了残差网络（ResNet）。其核心思想是：每个添加层都应该更容易地包含原始函数作为其元素之一。
+
+### 7.6.2.残差块
+
+![image-20250729195315256](./Chapter7.assets/image-20250729195315256.png)
+
+如图，其中左图是一个正常块，右图是一个残差块。
+
+聚焦于神经网络的局部，假设原始输入为$x$，而希望学习出的理想映射为$f(x)$。左图虚线框部分需要直接拟合出该映射$f(x)$，而右图虚线框则需要拟合出残差映射$f(x)-x$。残差映射在现实中往往更容易优化。
+
+右图是ResNet的基础架构-残差块(residual block)。在残差块中，输入可通过跨层数据线路更快地向前传播。
+
+ResNet沿用了VGG完整的$3\times3$卷积层设计。残差块里首先有2个有相同输出通道数的$3\times3$卷积层。每个卷积层后接一个批量归一化层和ReLU激活函数。然后通过跨层数据通路，跳过这两个卷积运算，将输入直接加在最后的ReLU激活函数前。
+
+这样的设计要求两个卷积层的输入与输出形状一致，从而使它们可以相加。如果想改变通道数，则需要引入一个额外的$1\times1$卷积层来将输入变换成需要的形状后再做相加运算。
+
+残差块的实现如下：
+
+```python
+class Residual(nn.Module):
+    def __init__(self,input_channels,num_channels,use_1x1conv=False,strides=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(input_channels,num_channels,kernel_size=3,padding=1,stride=strides)
+        self.conv2 = nn.Conv2d(num_channels,num_channels,kernel_size=3,padding=1)
+        if use_1x1conv:
+            self.conv3 = nn.Conv2d(input_channels,num_channels,kernel_size=1,stride=strides)
+        else:
+            self.conv3 = None
+        self.bn1 = nn.BatchNorm2d(num_channels)
+        self.bn2 = nn.BatchNorm2d(num_channels)
+    def forward(self,X):
+        Y = F.relu(self.bn1(self.conv1(X)))
+        Y = self.bn2(self.conv2(Y))
+        if self.conv3:
+            X = self.conv3(X)
+        Y += X
+        return F.relu(Y)
+```
+
+如下图所示，此代码生成两种类型的网络。当use_1x1conv=False时，应用ReLU非线性函数之前，将输入添加到输出。为True时，添加通过1x1卷积调整通道和分辨率。
+
+![image-20250729230512112](./Chapter7.assets/image-20250729230512112.png)
+
+> 代码中隐含着，当use_1x1conv=False时，num_channels = input_channels
+
+下面查看输入和输出形状一致的情况。
+
+```python
+blk = Residual(3,3)
+X = torch.rand(4,3,6,6)
+Y = blk(X)
+Y.shape
+```
+
+```cmd
+torch.Size([4, 3, 6, 6])
+```
+
+我们也可以在增加通道数的同时，减半输出的宽与高
+
+```python
+blk = Residual(3,6,use_1x1conv=True,strides=2)
+print(blk(X).shape)
+```
+
+```cmd
+torch.Size([4, 6, 3, 3])
+```
+
+### 7.6.3.ResNet模型
+
+ResNet的前两层跟之前介绍的GoogLeNet一致：在输出通道数为64，步幅为2的7x7卷积层后，接步幅为2的3x3的最大汇聚层。不同之处在于，ResNet每个卷积层后都加了BN层。
+
+```python
+b1 = nn.Sequential(
+    nn.Conv2d(1,64,kernel_size=7,padding=3,stride=2),
+    nn.BatchNorm2d(64),nn.ReLU(),
+    nn.MaxPool2d(kernel_size=3,stride=2,padding=1)
+)
+```
+
+GoogLeNet在后面接了4个由Inception块组成的模块。ResNet则使用4个由残差块组成的模块，每个模块使用若干个同样输出通道数的残差块。第一个模块的通道数同输入通道数一致。
+
+由于之前已经使用步幅为2的最大汇聚层，所以无需减小宽与高。之后的每个模块在第一个残差块的基础里将上一个模块的通道数翻倍，并将宽与高减半。
+
+具体实现如下：
+
+```python
+def resnet_block(input_channels,num_channels,num_residuals,first_block=False):
+    blk=[]
+    for i in range(num_residuals):
+        if i== 0 and not first_block:
+            blk.append(Residual(input_channels,num_channels,use_1x1conv=True,strides=2))
+        else:
+            blk.append(Residual(num_channels,num_channels))
+    return blk       
+```
+
+接着在ResNet中加入所有残差块，这里每个模块使用两个残差块。
+
+```python
+b2 = nn.Sequential(*resnet_block(64,64,2,first_block=True))
+b3 = nn.Sequential(*resnet_block(64,128,2))
+b4 = nn.Sequential(*resnet_block(128,256,2))
+b5 = nn.Sequential(*resnet_block(256,512,2))
+```
+
+最后与GoogLeNet类似，在ResNet中加入全局平均汇聚层，以及全连接层输出。
+
+```python
+net = nn.Sequential(
+    b1,b2,b3,b4,b5,
+    nn.AdaptiveAvgPool2d((1,1)),
+    nn.Flatten(),
+    nn.Linear(512,10)
+)
+```
+
+每个模块有4个卷积层（不包含恒等映射的1x1卷积层）。加上第一个7x7卷积层和最后一个全连接层，共有18层。因此这种模型通常被称为ResNet-18。
+
+通过配置不同的通道数和模块里的残差块数，可以得到不同的ResNet模型，例如更深的含152层的ResNet-152。虽然ResNet的主体与GoogLeNet一致，但架构更加简单，修改也更方便，导致其迅速被广泛使用。
+
+如下图是完整的ResNet-18模型：
+
+![image-20250729232625382](./Chapter7.assets/image-20250729232625382.png)
+
+在训练ResNet之前，首先观察一下ResNet中不同模块的输入形状如何变化。
+
+```python
+X = torch.rand(size=(1,1,224,224))
+for layer in net:
+    X = layer(X)
+    print(layer.__class__.__name__,'output shape\t',X.shape)
+```
+
+```cmd
+Sequential output shape  torch.Size([1, 64, 56, 56])
+Sequential output shape  torch.Size([1, 64, 56, 56])
+Sequential output shape  torch.Size([1, 128, 28, 28])
+Sequential output shape  torch.Size([1, 256, 14, 14])
+Sequential output shape  torch.Size([1, 512, 7, 7])
+AdaptiveAvgPool2d output shape   torch.Size([1, 512, 1, 1])
+Flatten output shape     torch.Size([1, 512])
+Linear output shape      torch.Size([1, 10])
+```
+
+### 7.6.5.小结
+
+- 学习嵌套函数（nested function）是训练神经网络的理想情况。在深层神经网络中，学习另一层作为恒等映射较为容易。
+- 残差映射可以更容易地学习同一函数，例如将权重层的参数近似为0。
+- 利用残差块可以训练出一个有效的深层神经网络：输入可以通过层间的残余连接更快地向前传播。
+
+
+
+## 7.7.稠密连接网络（DenseNet）
+
+稠密连接网络在某种程度上是ResNet的逻辑扩展。
+
+### 7.7.1.从ResNet到DenseNet
+
+回想一下任意函数的泰勒展开式，它把函数分解成越来越高阶的项。在$x$接近0时，
+$$
+f(x)=f(0)+f'(0)x+\frac{f''(0)}{2!}x^2+\frac{f'''(0)}{3!}x^3+...
+$$
+同样，ResNet将函数展开为：
+$$
+f(x)=x+g(x)
+$$
+也就是说，ResNet将$f$分解为两部分：一个简单的线性项和一个复杂的非线性项。
+
+那么，如果我们想将$f$扩展为超过两部分的信息呢？一种方案就是DenseNet。
+
