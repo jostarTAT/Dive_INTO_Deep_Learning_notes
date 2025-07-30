@@ -791,3 +791,123 @@ $$
 
 那么，如果我们想将$f$扩展为超过两部分的信息呢？一种方案就是DenseNet。
 
+如下图所示，DenseNet与ResNet的关键区别在于：DenseNet（右图）输出是连接，而不是像ResNet（左图）中的简单相加。
+
+![image-20250730105817655](./Chapter7.assets/image-20250730105817655.png)
+
+因此，在应用越来越复杂的函数序列后，我们执行从$\mathbf{x}$到其展开式的映射：
+$$
+\mathbf{x} \to \left[
+\mathbf{x},
+f_1(\mathbf{x}),
+f_2([\mathbf{x}, f_1(\mathbf{x})]), f_3([\mathbf{x}, f_1(\mathbf{x}), f_2([\mathbf{x}, f_1(\mathbf{x})])]), \ldots\right].
+$$
+最后，我们将这些展开式结合到多层感知机中，再次减少特征的数量。实现起来非常简单，不需要添加项，而是将它们连接起来。如图所示，最后一层与之前的所有层紧密连接起来：
+
+![image-20250730110332643](./Chapter7.assets/image-20250730110332643.png)
+
+稠密网络主要由2部分组成：稠密块（dense block）与过渡层（transition layer）。前者定义如何连接输入和输出，后者控制通道数量，使其不会太复杂。
+
+### 7.7.2.稠密块体
+
+DenseNet使用了ResNet改良版的“批量归一化、激活、卷积”架构。
+
+```python
+def conv_block(input_channels,num_channels):
+    return nn.Sequential(
+        nn.BatchNorm2d(input_channels),
+        nn.ReLU(),
+        nn.Conv2d(input_channels,num_channels,kernel_size=3,padding=1)
+    )
+```
+
+一个稠密块由多个卷积块构成，每个卷积块使用相同数量的输出通道。然而，在前向传播中，我们将每个卷积块的输入和输出在通道维度连接。
+
+```python
+class DenseBlock(nn.Module):
+    def __init__(self,num_convs,input_channels,num_channels):
+        super().__init__()
+        layer = []
+        for i in range(num_convs):
+            layer.append(conv_block(num_channels*i+input_channels,num_channels))
+        self.net = nn.Sequential(*layer)
+    def forward(self,X):
+        for blk in self.net:
+            Y = blk(X)
+            X = torch.cat((X,Y),dim=1)
+        return X
+```
+
+在下面的例子中，我们定义一个有2个输出通道数为10的DenseBlock。使用通道数为3的输入，则最终会得到通道数为$3+2\times 10=23$的输出。卷积块的通道数控制了输出通道数相对于输入通道数的增长，因此也被称为增长率（growth rate）。
+
+```python
+blk = DenseBlock(2,3,10)
+X = torch.randn(4,3,8,8)
+Y = blk(X)
+Y.shape
+```
+
+```cmd
+torch.Size([4, 23, 8, 8])
+```
+
+### 7.7.3.过渡层
+
+由于每个稠密块都会带来通道数的增加，使用过多则会过于复杂化模型。而过渡层可以控制模型复杂度。它通过$1\times1$卷积层来减小通道数，并使用步幅为2的平均汇聚层来减半宽、高，从而进一步降低模型复杂度。
+
+```python
+def transision_block(input_channels,num_channels):
+    return nn.Sequential(
+        nn.BatchNorm2d(input_channels),nn.ReLU(),
+        nn.Conv2d(input_channels,num_channels,kernel_size=1),
+        nn.AvgPool2d(kernel_size=2,stride=2)
+    )
+```
+
+对上一个例子中的稠密块的输出使用通道数为10的过渡层，此时通道数减为10，宽、高均减半。
+
+```python
+torch.Size([4, 10, 4, 4])
+```
+
+### 7.7.4.DenseNet模型
+
+DenseNet首先使用与ResNet一样的单卷积层和最大汇聚层
+
+```python
+b1 = nn.Sequential(
+    nn.Conv2d(1,64,kernel_size=7,padding=3,stride=2),
+    nn.BatchNorm2d(64),
+    nn.ReLU(),
+    nn.MaxPool2d(kernel_size=3,stride=2,padding=1)
+)
+```
+
+类似于ResNet使用的4个残差块，DenseNet使用的是4个稠密块。与ResNet类似，我们可以设置每个稠密块使用多少个卷积层，这里我们设置为4。稠密块里的卷积层通道数（增长率）设置为32，所以每个稠密块增加128个通道。
+
+```python
+num_channels = 64 
+growth_rate = 32
+num_convs_in_dense_blocks = [4,4,4,4]
+blks = []
+for i ,num_convs in enumerate(num_convs_in_dense_blocks):
+    blks.append(DenseBlock(num_convs,num_channels,growth_rate))
+    num_channels += num_convs*growth_rate
+    if i!=len(num_convs_in_dense_blocks)-1:
+        blks.append(transision_block(num_channels,num_channels//2))
+        num_channels = num_channels//2
+net = nn.Sequential(
+    b1,*blks,
+    nn.BatchNorm2d(num_channels),nn.ReLU(),
+    nn.AdaptiveAvgPool2d((1,1)),
+    nn.Flatten(),
+    nn.Linear(num_channels,10)
+)
+```
+
+### 7.7.5.小结
+
+- 在跨层连接上，不同于ResNet中将输入与输出相加，稠密连接网络在通道维上连结输入与输出。
+- DenseNet主要的构建模块是稠密块与过渡层。
+- 在构建DenseNet时，我们需要通过添加过渡层来控制网络的维数，从而再次减少通道数量。
+
