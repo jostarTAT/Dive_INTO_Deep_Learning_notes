@@ -531,3 +531,127 @@ print(trigram_vocab.token_freqs[:10])
 
 下面的代码每次可以从数据中随机生成一个小批量。在这里，参数`batch_size`指定了每个小批量中子序列样本的数目，参数`num_steps`是每个子序列中预定义的时间步数。
 
+```python
+def seq_data_iter_random(corpus,batch_size,num_steps):
+    corpus = corpus[random.randint(0,num_steps-1):] #随机丢弃几个词元，相当于随机化偏移k
+    num_subseqs = (len(corpus)-1)//num_steps  #计算丢弃后可分割的序列数量
+    initial_indices = list(range(0,num_subseqs*num_steps,num_steps)) #每个序列的起始索引
+    random.shuffle(initial_indices)  #打乱每个序列的起始索引
+    def data(pos):
+        return corpus[pos:pos+num_steps] #可以得到pos为起始的长度为num_steps的子序列
+    num_batches = num_subseqs // batch_size  #计算batch数量
+    for i in range(0,batch_size*num_batches,batch_size): #每个i是0，batch_size,2batch_size...
+        initial_indices_per_batch = initial_indices[i:i+batch_size]
+        # 该轮次的索引是initial_indices中i到i+batch_size的部分，有batch_size个子序列
+        X = [data(j) for j in initial_indices_per_batch]
+        Y = [data(j+1) for j in initial_indices_per_batch]
+        yield torch.tensor(X),torch.tensor(Y)
+        # yield将函数变成生成器
+```
+
+> 这里的Y并非是一个词元，而是与X大小相同的一个序列。
+
+下面生成一个从0到34的序列。假设批量大小设为2，时间步数为5，意味着我们可以生成$\lfloor (35 - 1) / 5 \rfloor= 6$个“特征-标签”子序列对。
+
+```python
+my_seq = list(range(35))
+for X,Y in seq_data_iter_random(my_seq,2,5):
+    print("X:",X,"\n","Y:",Y)
+```
+
+```cmd
+X: tensor([[ 2,  3,  4,  5,  6],
+        [27, 28, 29, 30, 31]]) 
+ Y: tensor([[ 3,  4,  5,  6,  7],
+        [28, 29, 30, 31, 32]])
+X: tensor([[12, 13, 14, 15, 16],
+        [ 7,  8,  9, 10, 11]])
+ Y: tensor([[13, 14, 15, 16, 17],
+        [ 8,  9, 10, 11, 12]])
+X: tensor([[17, 18, 19, 20, 21],
+        [22, 23, 24, 25, 26]])
+ Y: tensor([[18, 19, 20, 21, 22],
+        [23, 24, 25, 26, 27]])
+```
+
+> 为什么是生成6个：特征-标签”序列对？
+>
+> 首先，虽然这个函数是随机采样，但在单次应用这个函数时，其内部的初始偏置就已经固定，故内部的子序列就已经切好，共有$\lfloor \frac{n-1}{t}\rfloor$个序列。在这个函数生成器中，每次返回batch_size组数据。
+>
+> 为什么Y的大小不是1而是与X相同？
+>
+> 就拿X: tensor([[ 2,  3,  4,  5,  6], Y: tensor([[ 3,  4,  5,  6,  7],这组数据举例：
+>
+> 其预测并非是，用X=[2,3,4,5,6]预测Y=[7]，而是用[2]预测3，[2,3]预测[4]，[2,3,4]预测[5]，以此类推，最多预测5步。
+
+随机采样的特点是，同一个batch中，不同batch之间的子序列并不相邻，是随机打乱的。
+
+#### 8.3.4.2.顺序分区
+
+在迭代过程中，除了对原始序列可以随机抽样之外，还可以保证两个相邻小批量中的子序列在原始序列上也是相邻的。这种策略在基于小批量的迭代过程中保留了拆分的子序列的顺序，因此也被称为顺序分区。
+
+```python
+def seq_data_iter_sequential(corpus,batch_size,num_steps):
+    offset = random.randint(0,num_steps)
+    num_tokens = ((len(corpus)-offset-1)//batch_size)*batch_size
+    Xs = torch.tensor(corpus[offset:offset+num_tokens])
+    Ys = torch.tensor(corpus[offset+1:offset+1+num_tokens])
+    Xs,Ys = Xs.reshape(batch_size,-1),Ys.reshape(batch_size,-1)
+    num_batches = Xs.shape[1]//num_steps
+    for i in range(0,num_steps*num_batches,num_steps):
+        X = Xs[:,i:i+num_steps]
+        Y = Ys[:,i:i+num_steps]
+        yield X,Y
+```
+
+在顺序分区算法中，迭代期间来自两个相邻小批量中的子序列在原始序列中相邻。
+
+```python
+for X,Y in seq_data_iter_sequential(my_seq,batch_size=2,num_steps=5):
+    print('X:',X,'\nY:',Y)
+```
+
+```cmd
+X: tensor([[ 1,  2,  3,  4,  5],
+        [17, 18, 19, 20, 21]]) 
+Y: tensor([[ 2,  3,  4,  5,  6],
+        [18, 19, 20, 21, 22]])
+X: tensor([[ 6,  7,  8,  9, 10],
+        [22, 23, 24, 25, 26]])
+Y: tensor([[ 7,  8,  9, 10, 11],
+        [23, 24, 25, 26, 27]])
+X: tensor([[11, 12, 13, 14, 15],
+        [27, 28, 29, 30, 31]])
+Y: tensor([[12, 13, 14, 15, 16],
+        [28, 29, 30, 31, 32]])
+```
+
+接下来，将上面两个采样函数包装到一个类中，以便稍后可以将其用作数据迭代器。
+
+```python
+class SeqDataLoader:
+    def __init__(self,batch_size,num_steps,use_random_iter,max_tokens):
+        if use_random_iter:
+            self.data_iter_fn = d2l.seq_data_iter_random
+        else:
+            self.data_iter_fn = d2l.seq_data_iter_sequential
+        self.corpus,self.vocab = d2l.load_corpus_time_machine(max_tokens)
+        self.batch_size,self.num_steps = batch_size,num_steps
+    def __iter__(self):
+        return self.data_iter_fn(self.corpus,self.batch_size,self.num_steps)
+```
+
+最后定义了一个函数load_data_time_machine，它同时返回数据迭代器和词表。
+
+```python
+def load_data_time_machine(batch_size,num_steps,use_random_iter=False,max_tokens=10000):
+    data_iter = SeqDataLoader(batch_size,num_steps,use_random_iter,max_tokens)
+    return data_iter,data_iter.vocab
+```
+
+### 8.3.5.小结
+
+- 语言模型是NLP的关键，其目的是估计文本序列的联合概率。
+- 使用统计方法时采用$n$元语法。
+- 读取长序列的主要方式是随机采样和顺序分区。在迭代过程中，后者可以保证来自两个相邻小批量中的子序列在原始序列上也是相邻的。
+
